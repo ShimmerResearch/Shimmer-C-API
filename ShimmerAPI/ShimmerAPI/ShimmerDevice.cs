@@ -11,6 +11,13 @@ namespace ShimmerAPI
     {
         protected double LastReceivedTimeStamp = 0;
         protected double CurrentTimeStampCycle = 0;
+        /// <summary>
+        /// True when the sample most recently passed to CalibrateTimeStamp carried an
+        /// invalid zero timestamp and was rejected rather than unwrapped. Its sensor
+        /// data is fine; only its timestamp is missing. A caller reading a file should
+        /// drop the record - see ShimmerSDLog.ReadPacketMsg.
+        /// </summary>
+        public bool LastTimestampRejected { get; protected set; }
         protected double LastReceivedCalibratedTimeStamp = -1;
         protected double CalTimeStart;
         protected double SamplingRate;
@@ -35,12 +42,15 @@ namespace ShimmerAPI
         {
             //first convert to continuous time stamp
             double calibratedTimeStamp = 0;
-            if (LastReceivedTimeStamp > (timeStamp + (TimeStampPacketRawMaxValue * CurrentTimeStampCycle)))
-            {
-                CurrentTimeStampCycle = CurrentTimeStampCycle + 1;
-            }
+            TimestampUnwrap.Result unwrapped = TimestampUnwrap.Unwrap(
+                timeStamp, LastReceivedTimeStamp, CurrentTimeStampCycle, TimeStampPacketRawMaxValue);
 
-            LastReceivedTimeStamp = (timeStamp + (TimeStampPacketRawMaxValue * CurrentTimeStampCycle));
+            LastTimestampRejected = unwrapped.Rejected;
+            CurrentTimeStampCycle = unwrapped.Cycle;
+            //On a rejected sample this puts back the value it already held, which is
+            //what keeps the rejection from cascading: the next sample reads above it
+            //and is accepted normally.
+            LastReceivedTimeStamp = unwrapped.Unwrapped;
 
             double clockConstant = 1024;
             if (HardwareVersion == (int)ShimmerVersion.SHIMMER2R || HardwareVersion == (int)ShimmerVersion.SHIMMER2)
@@ -58,8 +68,10 @@ namespace ShimmerAPI
                 FirstTimeCalTime = false;
                 CalTimeStart = calibratedTimeStamp;
             }
-            if (LastReceivedCalibratedTimeStamp != -1)
+            if (LastReceivedCalibratedTimeStamp != -1 && !LastTimestampRejected)
             {
+                //A rejected sample carries the previous timestamp, so the difference
+                //here would be zero - a gap that never happened.
                 double timeDifference = calibratedTimeStamp - LastReceivedCalibratedTimeStamp;
                 double expectedTimeDifference = (1 / SamplingRate) * 1000; //in ms
                 double adjustedETD = expectedTimeDifference + (expectedTimeDifference * 0.1);

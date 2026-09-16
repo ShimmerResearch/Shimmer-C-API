@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using ShimmerAPI;
 using static ShimmerAPI.ShimmerBluetooth;
 
 namespace TestSerialPort
@@ -93,12 +94,12 @@ namespace TestSerialPort
         {
             //first convert to continuous time stamp
             double calibratedTimeStamp = 0;
-            if (LastReceivedTimeStamp > (timeStamp + (TimeStampPacketRawMaxValue * CurrentTimeStampCycle)))
-            {
-                CurrentTimeStampCycle = CurrentTimeStampCycle + 1;
-            }
-
-            LastReceivedTimeStamp = (timeStamp + (TimeStampPacketRawMaxValue * CurrentTimeStampCycle));
+            //Shared with the API rather than copied: a copy of this rule is how the
+            //same defect ended up in four Shimmer host APIs at once.
+            TimestampUnwrap.Result unwrapped = TimestampUnwrap.Unwrap(
+                timeStamp, LastReceivedTimeStamp, CurrentTimeStampCycle, (int)TimeStampPacketRawMaxValue);
+            CurrentTimeStampCycle = unwrapped.Cycle;
+            LastReceivedTimeStamp = unwrapped.Unwrapped;
             calibratedTimeStamp = LastReceivedTimeStamp / 32768 * 1000;   // to convert into mS
             if (FirstTimeCalTime)
             {

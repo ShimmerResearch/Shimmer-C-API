@@ -61,6 +61,7 @@
     <Compile Include="ShimmerBluetoothReadData.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="ShimmerTest.cs" />
+    <Compile Include="TimestampUnwrapTest.cs" />
     <Compile Include="ShimmerReadDataPacketTest.cs" />
   </ItemGroup>
   <ItemGroup>

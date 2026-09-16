@@ -542,7 +542,45 @@ public void ProcessSDLogHeader(byte[] byteArrayInfo)
         
     }
 
+        /// <summary>
+        /// Reads the next usable sample from the file.
+        /// <para>
+        /// Records whose timestamp field is zero are dropped rather than returned. The
+        /// firmware stamps a packet when its sample tick starts it and does not publish
+        /// one it never stamped, so such a record is invalid - its sensor data is fine
+        /// but there is nothing to place it on the timeline with. LogAndStream
+        /// v1.00.x-v1.01.003 could write one under SD write back-pressure, and reading
+        /// it as a 24-bit roll-over adds 512 seconds to everything after it.
+        /// </para>
+        /// <para><see cref="RejectedTimestampRowCount"/> reports how many were dropped.</para>
+        /// </summary>
+        /// <returns>the next sample, or null at end of file</returns>
         public ObjectCluster ReadPacketMsg()
+        {
+            ObjectCluster ojc = ReadOnePacketMsg();
+
+            while (ojc != null && LastTimestampRejected)
+            {
+                RejectedTimestampRowCount++;
+                if (EndOfFile)
+                {
+                    return null;
+                }
+                ojc = ReadOnePacketMsg();
+            }
+
+            return ojc;
+        }
+
+        /// <summary>
+        /// How many records this pass dropped because they carried no timestamp. Zero
+        /// for a file written by firmware without the defect described on
+        /// <see cref="ReadPacketMsg"/>.
+        /// </summary>
+        public int RejectedTimestampRowCount { get; private set; }
+
+        /// <summary>One physical record, whether or not it is usable.</summary>
+        private ObjectCluster ReadOnePacketMsg()
         {
             int fullPacketSize;
 
