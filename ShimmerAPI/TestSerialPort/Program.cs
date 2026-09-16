@@ -11,6 +11,12 @@ namespace TestSerialPort
     class Program
     {
         protected static double LastReceivedTimeStamp = 0;
+        /// <summary>
+        /// True when the last packet carried an invalid zero timestamp and was
+        /// rejected rather than unwrapped - see TimestampUnwrap. This sample program
+        /// has nowhere to drop a packet to, so it reports it instead.
+        /// </summary>
+        protected static bool LastTimestampRejected = false;
         protected static double CurrentTimeStampCycle = 0;
         protected static double LastReceivedCalibratedTimeStamp = -1;
         protected static double TimeStampPacketRawMaxValue = 16777216;// 16777216 or 65536 
@@ -73,6 +79,13 @@ namespace TestSerialPort
                 }
                 double parsedts = parseTimeStamps(dataTS);
                 double calibratedts = CalibrateTimeStamp(parsedts);
+                if (LastTimestampRejected)
+                {
+                    //Said every time rather than once a second: these are rare, and
+                    //the timestamp printed for this packet is the previous one.
+                    System.Console.WriteLine();
+                    System.Console.WriteLine("packet with no timestamp - held the previous one");
+                }
                 if (i % SamplingRate == 0)
                     System.Console.Write(calibratedts + "," + (calibratedts-lastKnownTS) +"," + SerialPort.BytesToRead);
                 lastKnownTS = calibratedts;
@@ -98,6 +111,7 @@ namespace TestSerialPort
             //same defect ended up in four Shimmer host APIs at once.
             TimestampUnwrap.Result unwrapped = TimestampUnwrap.Unwrap(
                 timeStamp, LastReceivedTimeStamp, CurrentTimeStampCycle, (int)TimeStampPacketRawMaxValue);
+            LastTimestampRejected = unwrapped.Rejected;
             CurrentTimeStampCycle = unwrapped.Cycle;
             LastReceivedTimeStamp = unwrapped.Unwrapped;
             calibratedTimeStamp = LastReceivedTimeStamp / 32768 * 1000;   // to convert into mS
