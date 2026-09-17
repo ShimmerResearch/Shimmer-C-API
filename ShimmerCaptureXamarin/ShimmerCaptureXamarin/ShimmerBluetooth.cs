@@ -205,6 +205,12 @@ namespace ShimmerAPI
         public double GainSGLow = 183.7;
         protected double LastReceivedTimeStamp = 0;
         protected double CurrentTimeStampCycle = 0;
+        /// <summary>
+        /// False only before the first sample of a stream. The pair above cannot say
+        /// it on their own: (0, 0) is the reset state and also a state the unwrap can
+        /// reach, when a reordered packet lands exactly on the counter's origin.
+        /// </summary>
+        protected bool HasPreviousTimeStamp = false;
         protected double LastReceivedCalibratedTimeStamp = -1;
         protected double CalTimeStart;
         public long PacketLossCount = 0;
@@ -4029,6 +4035,9 @@ namespace ShimmerAPI
                     StreamTimeOutCount = 0;
                     LastReceivedTimeStamp = 0;
                     CurrentTimeStampCycle = 0;
+                    //A stream start: the next sample is the first one, and the pair
+                    //above cannot say so on their own.
+                    HasPreviousTimeStamp = false;
                     LastReceivedCalibratedTimeStamp = -1;
                     FirstTimeCalTime = true;
                     FirstSystemTimestamp = true;
@@ -5529,12 +5538,19 @@ namespace ShimmerAPI
                 : Math.Min(8 * 32768.0 / SamplingRate, maxTicks / 8.0);
             bool rejected = false;
 
-            if (LastReceivedTimeStamp == 0 && CurrentTimeStampCycle == 0)
+            if (!HasPreviousTimeStamp)
             {
                 // No predecessor yet. Treating the reset state as a real sample at zero
                 // would let a first raw value near the top of the range read as a packet
                 // reordered across a boundary, placing a whole recording a modulo early.
+                //
+                // Asked outright rather than inferred from (0, 0), which is the reset
+                // state AND a state this rule can reach: a reorder landing exactly on
+                // the counter's origin leaves both at zero mid stream, after which the
+                // next packet is read as a first sample. See the conformance vector
+                // reorder-onto-origin-then-earlier-packet-24bit.
                 LastReceivedTimeStamp = timeStamp;
+                CurrentTimeStampCycle = 0;
             }
             else
             {
@@ -5572,6 +5588,8 @@ namespace ShimmerAPI
                     CurrentTimeStampCycle = Math.Floor(LastReceivedTimeStamp / maxTicks);
                 }
             }
+
+            HasPreviousTimeStamp = true;
 
             calibratedTimeStamp = LastReceivedTimeStamp / 32768 * 1000;   // to convert into mS
             if (FirstTimeCalTime)

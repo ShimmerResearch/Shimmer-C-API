@@ -12,6 +12,12 @@ namespace ShimmerAPI
         protected double LastReceivedTimeStamp = 0;
         protected double CurrentTimeStampCycle = 0;
         /// <summary>
+        /// False only before the first sample of a stream. The pair above cannot say
+        /// it on their own: (0, 0) is the reset state and also a state the unwrap can
+        /// reach, when a reordered packet lands exactly on the counter's origin.
+        /// </summary>
+        protected bool HasPreviousTimeStamp = false;
+        /// <summary>
         /// True when the sample most recently passed to CalibrateTimeStamp carried an
         /// invalid zero timestamp and was rejected rather than unwrapped. Its sensor
         /// data is fine; only its timestamp is missing. A caller reading a file should
@@ -73,7 +79,8 @@ namespace ShimmerAPI
             double calibratedTimeStamp = 0;
             TimestampUnwrap.Result unwrapped = TimestampUnwrap.Unwrap(
                 timeStamp, LastReceivedTimeStamp, CurrentTimeStampCycle, TimeStampPacketRawMaxValue,
-                GetReorderWindowTicks());
+                GetReorderWindowTicks(), HasPreviousTimeStamp);
+            HasPreviousTimeStamp = true;
 
             LastTimestampRejected = unwrapped.Rejected;
             CurrentTimeStampCycle = unwrapped.Cycle;

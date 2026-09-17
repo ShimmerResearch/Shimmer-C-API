@@ -249,9 +249,16 @@ namespace ShimmerBluetoothTests
                 new double[] { 5000, 5288, 16782216 },
                 new bool[] { false, false, false },
                 1),
+            new UnwrapVector(
+                "reorder-onto-origin-then-earlier-packet-24bit",
+                16777216, 520.0,
+                new double[] { 520, 0, 16777200 },
+                new double[] { 520, 0, -16 },
+                new bool[] { false, false, false },
+                -1),
         };
 
-        internal const int VectorCount = 26;
+        internal const int VectorCount = 27;
 
         /// <summary>Feeds a series of raw values through the unwrapper, as a caller would.</summary>
         private class Unwrapper
@@ -259,6 +266,7 @@ namespace ShimmerBluetoothTests
             public double LastUnwrapped;
             public double Cycle;
             public bool LastRejected;
+            private bool _hasPrevious;
             private readonly double _window;
 
             public Unwrapper(double window)
@@ -268,8 +276,11 @@ namespace ShimmerBluetoothTests
 
             public double Feed(double rawTicks, int maxTicks)
             {
+                // The six-argument form: a stream knows whether it has seen a sample,
+                // and (0, 0) cannot say so once a reorder can land on the origin.
                 TimestampUnwrap.Result r = TimestampUnwrap.Unwrap(
-                    rawTicks, LastUnwrapped, Cycle, maxTicks, _window);
+                    rawTicks, LastUnwrapped, Cycle, maxTicks, _window, _hasPrevious);
+                _hasPrevious = true;
                 LastRejected = r.Rejected;
                 Cycle = r.Cycle;
                 LastUnwrapped = r.Unwrapped;
@@ -295,11 +306,14 @@ namespace ShimmerBluetoothTests
             Assert.AreEqual(1, ExpectedRevision,
                 "vector file revision - update this test deliberately, not to make it pass");
 
-            // Three vectors have to be here by name: each is the case that one
-            // superseded rule gets wrong, so losing one would quietly stop covering it.
+            // Four vectors have to be here by name: the first three are each the case
+            // that one superseded rule gets wrong, and the fourth is the one that
+            // separates a host storing (unwrapped, cycle) from one storing the raw
+            // value. Losing any of them would quietly stop covering it.
             CollectionAssert.Contains(VectorIds(), "wrap-spanning-dropout-1p8s-16bit");
             CollectionAssert.Contains(VectorIds(), "reorder-across-wrap-boundary-24bit");
             CollectionAssert.Contains(VectorIds(), "wrap-after-heavy-loss-24bit");
+            CollectionAssert.Contains(VectorIds(), "reorder-onto-origin-then-earlier-packet-24bit");
         }
 
         [TestMethod]

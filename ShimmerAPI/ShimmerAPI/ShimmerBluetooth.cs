@@ -5421,6 +5421,9 @@ namespace ShimmerAPI
                     StreamTimeOutCount = 0;
                     LastReceivedTimeStamp = 0;
                     CurrentTimeStampCycle = 0;
+                    //A stream start: the next sample is the first one, and the pair
+                    //above cannot say so on their own.
+                    HasPreviousTimeStamp = false;
                     LastReceivedCalibratedTimeStamp = -1;
                     FirstTimeCalTime = true;
                     FirstSystemTimestamp = true;
@@ -7301,6 +7304,9 @@ namespace ShimmerAPI
                     StreamTimeOutCount = 0;
                     LastReceivedTimeStamp = 0;
                     CurrentTimeStampCycle = 0;
+                    //A stream start: the next sample is the first one, and the pair
+                    //above cannot say so on their own.
+                    HasPreviousTimeStamp = false;
                     LastReceivedCalibratedTimeStamp = -1;
                     FirstTimeCalTime = true;
                     FirstSystemTimestamp = true;

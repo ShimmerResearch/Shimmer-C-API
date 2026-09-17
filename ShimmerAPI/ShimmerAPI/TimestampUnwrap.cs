@@ -154,7 +154,35 @@ namespace ShimmerAPI
         public static Result Unwrap(double rawTicks, double lastUnwrapped, double cycle, int maxTicks,
             double reorderWindowTicks)
         {
-            if (lastUnwrapped == 0.0 && cycle == 0.0)
+            // (0, 0) is the reset state AND a state the rule can reach, so this
+            // overload cannot always tell them apart - see the six-argument form.
+            // Kept for callers written before the distinction existed.
+            return Unwrap(rawTicks, lastUnwrapped, cycle, maxTicks, reorderWindowTicks,
+                !(lastUnwrapped == 0.0 && cycle == 0.0));
+        }
+
+        /// <summary>
+        /// As above, but told outright whether a previous sample exists.
+        ///
+        /// The five-argument form infers it from the state being (0, 0). That is the
+        /// reset state, and it is also a state the rule can produce: a reorder that
+        /// lands exactly on the counter's origin leaves lastUnwrapped = 0 and
+        /// cycle = 0 in the middle of a stream. The next packet is then read as a
+        /// first sample and passed through, so one arriving from just before the
+        /// origin is placed a whole modulo late rather than a few ticks behind. The
+        /// conformance vector reorder-onto-origin-then-earlier-packet-24bit is
+        /// exactly that sequence.
+        ///
+        /// Hosts that keep the previous RAW value instead of a cycle count - the web
+        /// SDK and pyshimmer - never had the ambiguity.
+        /// </summary>
+        /// <param name="hasPreviousSample">
+        /// False only before the first sample of a stream.
+        /// </param>
+        public static Result Unwrap(double rawTicks, double lastUnwrapped, double cycle, int maxTicks,
+            double reorderWindowTicks, bool hasPreviousSample)
+        {
+            if (!hasPreviousSample)
             {
                 // Nothing has been unwrapped yet, so there is no predecessor to measure
                 // against. Taking the reset state as a real sample at zero would let a
