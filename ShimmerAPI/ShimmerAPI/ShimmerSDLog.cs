@@ -78,6 +78,25 @@ namespace ShimmerAPI
         private string MacAddress = "";
         private long mSampleCount = 0;
         public Boolean EndOfFile = false;
+
+        /// <summary>
+        /// Bytes in the sync offset record that heads each SD write buffer when the
+        /// trial was logged with sync on. Nine on every firmware this class reads;
+        /// the Java importer calls the same field a "u72".
+        /// </summary>
+        private const int OffsetLength = 9;
+
+        /// <summary>
+        /// The firmware's SD write buffer. It decides how many sample records sit
+        /// between one offset record and the next, so it has to match
+        /// SD_WRITE_BUF_SIZE in the firmware rather than any host-side buffer.
+        /// </summary>
+        private const int SdWriteBufferSize = 512;
+
+        private bool mSyncWhenLogging = false;
+        private int mSamplesPerBlock = 0;
+        private int mSampleCountInBlock = 0;
+        private byte[] mLastSyncOffset = null;
         protected override bool ShouldAddSystemTimestamp => false;
         public ShimmerSDLog(string filePath)
         {
@@ -208,15 +227,27 @@ public void ProcessSDLogHeader(byte[] byteArrayInfo)
         
         // 0-1 Byte = Sampling Rate (little-endian per original Java expression)
         long rawSamplingRate = byteArrayInfo[0] | (byteArrayInfo[1] << 8);
-        
 
-        SamplingRate = (32768 / rawSamplingRate);
+        // 32768.0, not 32768: both operands were integral, so this was integer
+        // division and the rate came out truncated - a divider of 65 gave 504 Hz
+        // rather than 504.123, and 640 gave 51 rather than 51.2. The error is small
+        // but it feeds the reorder window and any rate the caller reads back.
+        //
+        // The guard is for a blank or truncated header: a divider of zero threw
+        // DivideByZeroException here, taking out the whole import. Zero means "not
+        // known", which every rate consumer already handles.
+        SamplingRate = rawSamplingRate == 0 ? 0.0 : 32768.0 / rawSamplingRate;
 
         ParseEnabledDerivedSensorsForMaps(byteArrayInfo);
 
         ExpansionBoardId = byteArrayInfo[214];
         ExpansionBoardRev = byteArrayInfo[215];
         ExpansionBoardRevSpecial = byteArrayInfo[216];
+
+        // Trial config 0, bit 2. Read here, ahead of the per-hardware branches,
+        // because the byte means the same thing in both header layouts and the
+        // record reader needs it whichever board wrote the file.
+        mSyncWhenLogging = ((byteArrayInfo[16] >> 2) & 0x01) == 1;
 
 
         if (HardwareVersion == (int) ShimmerVersion.SHIMMER3R)
@@ -528,10 +559,17 @@ public void ProcessSDLogHeader(byte[] byteArrayInfo)
                 // NOTE: same memory caveat as Java
                 initializeAlgorithms();
                 */
-                if (signalIdArray != null && HardwareVersion == (int)ShimmerVersion.SHIMMER3R)
+                // Derive the timestamp width and its modulo from the firmware version,
+        // the same way the Bluetooth path does on connect. Without this a Shimmer3
+        // file keeps ShimmerDevice's 2-byte default of 65536 while carrying a 3-byte
+        // counter, so every roll-over adds 65536 instead of 2^24 and the recording
+        // reads as a negative duration. Replaces a hard-coded compatibility code
+        // that only the Shimmer3R branch used to set.
+        SetCompatibilityCode();
+        UpdateBasedOnCompatibilityCode();
+
+        if (signalIdArray != null && HardwareVersion == (int)ShimmerVersion.SHIMMER3R)
         {
-            CompatibilityCode = 9;
-            TimeStampPacketByteSize = 3;
             InterpretDataPacketFormat(NumberofChannels, signalIdArray);
         }
         else
@@ -539,28 +577,126 @@ public void ProcessSDLogHeader(byte[] byteArrayInfo)
             InterpretDataPacketFormat();
         }
 
+        // How many sample records follow each offset record. Derived from the
+        // firmware's write buffer rather than from the file, so it is known before
+        // the first record is read.
+        mSamplesPerBlock = (mSyncWhenLogging && PacketSize > 0)
+            ? (SdWriteBufferSize - OffsetLength) / PacketSize
+            : 0;
+        mSampleCountInBlock = 0;
+
         
     }
 
+        /// <summary>
+        /// Reads the next usable sample from the file.
+        /// <para>
+        /// Records whose timestamp field is zero are dropped rather than returned. The
+        /// firmware stamps a packet when its sample tick starts it and does not publish
+        /// one it never stamped, so such a record is invalid - its sensor data is fine
+        /// but there is nothing to place it on the timeline with. LogAndStream
+        /// v1.00.x-v1.01.003 could write one under SD write back-pressure, and reading
+        /// it as a 24-bit roll-over adds 512 seconds to everything after it.
+        /// </para>
+        /// <para><see cref="RejectedTimestampRowCount"/> reports how many were dropped.</para>
+        /// </summary>
+        /// <returns>the next sample, or null at end of file</returns>
         public ObjectCluster ReadPacketMsg()
         {
-            int fullPacketSize;
+            ObjectCluster ojc = ReadOnePacketMsg();
 
-            // indicates when there will be an offset value
-            bool timeSync = false;
+            while (ojc != null && LastTimestampRejected)
+            {
+                RejectedTimestampRowCount++;
+                if (EndOfFile)
+                {
+                    return null;
+                }
+                ojc = ReadOnePacketMsg();
+            }
 
-            fullPacketSize = PacketSize;
+            return ojc;
+        }
+
+        /// <summary>
+        /// How many records this pass dropped because they carried no timestamp. Zero
+        /// for a file written by firmware without the defect described on
+        /// <see cref="ReadPacketMsg"/>.
+        /// </summary>
+        public int RejectedTimestampRowCount { get; private set; }
+
+        /// <summary>
+        /// Bytes in one sample record, as the enabled-sensor bitmap in the header
+        /// describes it. Excludes the offset record, which is not sample data.
+        /// </summary>
+        public int SampleRecordSize()
+        {
+            return PacketSize;
+        }
+
+        /// <summary>True when the trial was logged with sync on, so the file is laid
+        /// out in blocks headed by an offset record.</summary>
+        public bool IsSyncWhenLogging()
+        {
+            return mSyncWhenLogging;
+        }
+
+        /// <summary>
+        /// Sample records between one offset record and the next; zero when the trial
+        /// was not synced and the records are contiguous.
+        /// </summary>
+        public int SamplesPerBlock()
+        {
+            return mSamplesPerBlock;
+        }
+
+        /// <summary>
+        /// The most recent offset record read, or null. All-0xFF means the node never
+        /// recorded an offset, which is what an unsynced node in a synced trial
+        /// writes. Returned raw: it is nine bytes and nothing here consumes it.
+        /// </summary>
+        public byte[] LastSyncOffset()
+        {
+            return mLastSyncOffset == null ? null : (byte[])mLastSyncOffset.Clone();
+        }
+
+        /// <summary>One physical record, whether or not it is usable.</summary>
+        private ObjectCluster ReadOnePacketMsg()
+        {
+            // Sync-when-logging puts an offset record at the head of each write
+            // buffer. It is not sample data - read it out of the way so the records
+            // after it stay aligned. Skipping it shifts the stream nine bytes at
+            // every block boundary and nothing downstream decodes.
+            if (mSamplesPerBlock > 0 && mSampleCountInBlock == 0)
+            {
+                byte[] offsetBytes = new byte[OffsetLength];
+                if (ReadFromLog(offsetBytes) != OffsetLength)
+                {
+                    EndOfFile = true;
+                    return null;
+                }
+                mLastSyncOffset = offsetBytes;
+            }
+
+            int fullPacketSize = PacketSize;
 
             byte[] newPacket = new byte[fullPacketSize];
 
             if (ReadFromLog(newPacket) != 0)
             {
                 mSampleCount++;
+                if (mSamplesPerBlock > 0)
+                {
+                    mSampleCountInBlock = (mSampleCountInBlock + 1) % mSamplesPerBlock;
+                }
 
                 // Java: super.buildMsg(newPacket, COMMUNICATION_TYPE.SD, timeSync, -1);
                 ObjectCluster ojc = base.BuildMsg(newPacket.ToList());
 
-                if (mTrackBytesRead == FileSize)
+                // >= rather than ==: with offset records the byte count no longer
+                // lands on a whole number of sample records, and a file with trailing
+                // padding would otherwise never report the end.
+                if (mTrackBytesRead >= FileSize)
                 {
                     EndOfFile = true;
                 }
