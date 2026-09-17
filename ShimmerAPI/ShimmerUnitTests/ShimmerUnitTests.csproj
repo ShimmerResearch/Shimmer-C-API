@@ -63,6 +63,7 @@
     <Compile Include="ShimmerTest.cs" />
     <Compile Include="TimestampUnwrapTest.cs" />
     <Compile Include="ShimmerSDLogParseTest.cs" />
+    <Compile Include="TimestampUnwrapVectorsTest.cs" />
     <Compile Include="ShimmerReadDataPacketTest.cs" />
   </ItemGroup>
   <ItemGroup>

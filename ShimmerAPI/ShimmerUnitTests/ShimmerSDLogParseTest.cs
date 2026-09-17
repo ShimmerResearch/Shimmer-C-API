@@ -110,6 +110,17 @@ namespace ShimmerBluetoothTests
         /// <param name="badRowIndexes">rows whose timestamp field is written as 00 00 00</param>
         private static string BuildFile(bool syncWhenLogging, int[] badRowIndexes)
         {
+            return BuildFile(syncWhenLogging, badRowIndexes, null);
+        }
+
+        /// <param name="badRowIndexes">rows whose timestamp field is written as 00 00 00</param>
+        /// <param name="tickOverrides">per-row timestamp overrides, applied after the
+        /// zeroing above. Lets a test write a file whose records are out of order or
+        /// duplicated - which the firmware does not produce, but a corrupt card or a
+        /// future writer could, and which the unwrap rule has to survive either way.</param>
+        private static string BuildFile(bool syncWhenLogging, int[] badRowIndexes,
+            System.Collections.Generic.Dictionary<int, long> tickOverrides)
+        {
             // The reader takes the last three characters of the path as the SD file
             // number, so give it a name shaped like one the firmware writes.
             string dir = Path.Combine(Path.GetTempPath(), "shimmer_sdlog_" + Guid.NewGuid().ToString("N"));
@@ -140,7 +151,15 @@ namespace ShimmerBluetoothTests
 
                     bool bad = Array.IndexOf(badRowIndexes, i) >= 0;
                     long ticks = (FirstTick + ((long)i * PeriodTicks)) & 0xFFFFFFL;
-                    WriteRow(outStream, bad ? 0L : ticks, i);
+                    if (bad)
+                    {
+                        ticks = 0L;
+                    }
+                    if (tickOverrides != null && tickOverrides.ContainsKey(i))
+                    {
+                        ticks = tickOverrides[i];
+                    }
+                    WriteRow(outStream, ticks, i);
                 }
             }
 
@@ -320,6 +339,143 @@ namespace ShimmerBluetoothTests
                 {
                     Assert.AreEqual(0xFF, b, "this file records no offset, so all bytes are 0xFF");
                 }
+            }
+            finally
+            {
+                DeleteFile(path);
+            }
+        }
+
+        /// <summary>
+        /// The header rate is the divider, and the conversion from it has to be
+        /// floating point. It was integer division, so a divider of 65 gave 504 Hz
+        /// rather than 504.123 and 640 gave 51 rather than 51.2 - small, but it feeds
+        /// the reorder window and anything a caller reads back.
+        /// </summary>
+        [TestMethod]
+        public void TestHeaderRateIsNotTruncatedToAnInteger()
+        {
+            string path = BuildFile(false, new int[0]);
+            try
+            {
+                var sdLog = new ShimmerSDLog(path);
+                Assert.AreEqual(32768.0 / SampleRateDivider, sdLog.GetSamplingRate(), 1e-9,
+                    "504.123 Hz, not 504");
+            }
+            finally
+            {
+                DeleteFile(path);
+            }
+        }
+
+        /// <summary>
+        /// A blank or truncated header has a divider of zero. That used to throw
+        /// DivideByZeroException out of the constructor and take the whole import with
+        /// it; zero now means "rate not known", which every consumer already handles.
+        /// </summary>
+        [TestMethod]
+        public void TestHeaderRateOfZeroDoesNotThrow()
+        {
+            string path = BuildFile(false, new int[0]);
+            try
+            {
+                byte[] content = File.ReadAllBytes(path);
+                content[0] = 0;
+                content[1] = 0;
+                File.WriteAllBytes(path, content);
+
+                var sdLog = new ShimmerSDLog(path);
+                Assert.AreEqual(0.0, sdLog.GetSamplingRate(), 0.0, "not known");
+            }
+            finally
+            {
+                DeleteFile(path);
+            }
+        }
+
+        /// <summary>
+        /// Two adjacent records the wrong way round. The reorder window is derived from
+        /// the header rate, so this also proves that rate reaches the unwrapper: with no
+        /// window the second record would be read as a roll-over and the file would gain
+        /// 512 seconds.
+        /// </summary>
+        [TestMethod]
+        public void TestSwappedRecordsDoNotAddAModulo()
+        {
+            var overrides = new System.Collections.Generic.Dictionary<int, long>();
+            long at1000 = (FirstTick + (1000L * PeriodTicks)) & 0xFFFFFFL;
+            long at1001 = (FirstTick + (1001L * PeriodTicks)) & 0xFFFFFFL;
+            overrides[1000] = at1001;
+            overrides[1001] = at1000;
+
+            string path = BuildFile(false, new int[0], overrides);
+            try
+            {
+                var sdLog = new ShimmerSDLog(path);
+                System.Collections.Generic.List<double> timestamps = ReadAllTimestamps(sdLog);
+
+                Assert.AreEqual(RowCount, timestamps.Count, "every record is returned");
+                Assert.AreEqual(0, sdLog.RejectedTimestampRowCount, "a reorder is not an invalid record");
+
+                double periodMs = PeriodTicks / TicksPerSecond * 1000.0;
+                int backwardSteps = 0;
+                double maxStep = 0;
+                for (int i = 1; i < timestamps.Count; i++)
+                {
+                    double step = timestamps[i] - timestamps[i - 1];
+                    if (step < 0)
+                    {
+                        backwardSteps++;
+                        Assert.AreEqual(-periodMs, step, 0.001, "the swap is one period backwards");
+                    }
+                    maxStep = Math.Max(maxStep, step);
+                }
+
+                Assert.AreEqual(1, backwardSteps, "exactly one record sits below its predecessor");
+                Assert.IsTrue(maxStep < 4 * periodMs,
+                    "and no step anywhere near a modulo (largest was " + maxStep + " ms)");
+                Assert.AreEqual((RowCount - 1) * periodMs, timestamps[timestamps.Count - 1] - timestamps[0], 0.001,
+                    "the recording still spans exactly the samples it took");
+            }
+            finally
+            {
+                DeleteFile(path);
+            }
+        }
+
+        /// <summary>A repeated record holds the timeline rather than counting a wrap.</summary>
+        [TestMethod]
+        public void TestDuplicateRecordHoldsTheTimeline()
+        {
+            var overrides = new System.Collections.Generic.Dictionary<int, long>();
+            overrides[2000] = (FirstTick + (1999L * PeriodTicks)) & 0xFFFFFFL;
+
+            string path = BuildFile(false, new int[0], overrides);
+            try
+            {
+                var sdLog = new ShimmerSDLog(path);
+                System.Collections.Generic.List<double> timestamps = ReadAllTimestamps(sdLog);
+
+                Assert.AreEqual(RowCount, timestamps.Count);
+                Assert.AreEqual(0, sdLog.RejectedTimestampRowCount);
+
+                double periodMs = PeriodTicks / TicksPerSecond * 1000.0;
+                int zeroSteps = 0;
+                for (int i = 1; i < timestamps.Count; i++)
+                {
+                    double step = timestamps[i] - timestamps[i - 1];
+                    Assert.IsTrue(step >= 0, "a duplicate never goes backwards");
+                    if (step == 0)
+                    {
+                        zeroSteps++;
+                    }
+                }
+                Assert.AreEqual(1, zeroSteps, "exactly one repeated timestamp");
+                // The duplicate holds the timeline, and the record after it then steps
+                // two periods rather than one - so the recording still spans exactly
+                // what it took. Holding rather than advancing is what keeps that true.
+                Assert.AreEqual((RowCount - 1) * periodMs, timestamps[timestamps.Count - 1] - timestamps[0], 0.001,
+                    "and the span is unchanged: the next record recovers the held period");
             }
             finally
             {
