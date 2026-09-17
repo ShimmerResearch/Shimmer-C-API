@@ -5498,24 +5498,91 @@ namespace ShimmerAPI
             }
         }
 
+        /// <summary>
+        /// NOT COMPILED IN THIS WORKSPACE. This project is a vendored fork and is not
+        /// built alongside ShimmerAPI, so it cannot reference ShimmerAPI's
+        /// TimestampUnwrap and carries the rule inline instead. Keep the two in step by
+        /// hand: ShimmerAPI/ShimmerAPI/TimestampUnwrap.cs is the original, and the rule
+        /// is specified in log-and-stream-common,
+        /// docs/SHIMMER3_STREAMING_DATA_FORMAT.md section 2.1, with conformance vectors
+        /// the other host APIs run against. This copy has no test covering it.
+        /// </summary>
         protected double CalibrateTimeStamp(double timeStamp)
         {
             //first convert to continuous time stamp
             double calibratedTimeStamp = 0;
-            if (LastReceivedTimeStamp > (timeStamp + (TimeStampPacketRawMaxValue * CurrentTimeStampCycle)))
+
+            // Classify the sample by its modular forward distance from the last one,
+            // with forward motion as the default. The naive rule this replaces - any
+            // backward step is a roll-over - is wrong three times over: on an
+            // out-of-order packet, on a record the firmware never stamped, and on a
+            // packet arriving late from before a wrap boundary.
+            double maxTicks = TimeStampPacketRawMaxValue;
+            bool isShimmer2 = HardwareVersion == (int)ShimmerBluetooth.ShimmerVersion.SHIMMER2
+                || HardwareVersion == (int)ShimmerBluetooth.ShimmerVersion.SHIMMER2R;
+            // Eight sample periods, clamped. Zero when the rate is unknown, and zero on
+            // Shimmer2, whose tick domain the two APIs disagree about. Never derive an
+            // infinite window from a rate of zero: that would make every backward step a
+            // reorder and lose every wrap.
+            double reorderWindow = (isShimmer2 || !(SamplingRate > 0))
+                ? 0.0
+                : Math.Min(8 * 32768.0 / SamplingRate, maxTicks / 8.0);
+            bool rejected = false;
+
+            if (LastReceivedTimeStamp == 0 && CurrentTimeStampCycle == 0)
             {
-                CurrentTimeStampCycle = CurrentTimeStampCycle + 1;
+                // No predecessor yet. Treating the reset state as a real sample at zero
+                // would let a first raw value near the top of the range read as a packet
+                // reordered across a boundary, placing a whole recording a modulo early.
+                LastReceivedTimeStamp = timeStamp;
+            }
+            else
+            {
+                double lastRaw = LastReceivedTimeStamp - (maxTicks * CurrentTimeStampCycle);
+                double forward = timeStamp - lastRaw;
+                if (forward < 0)
+                {
+                    forward += maxTicks;
+                }
+                double backwards = maxTicks - forward;
+
+                if (forward == 0)
+                {
+                    // A duplicate: hold the timeline where it is.
+                }
+                else if (backwards <= reorderWindow)
+                {
+                    // Reordered, on either side of a wrap boundary. Placed where it was
+                    // taken, which is below its predecessor.
+                    LastReceivedTimeStamp -= backwards;
+                    CurrentTimeStampCycle = Math.Floor(LastReceivedTimeStamp / maxTicks);
+                }
+                else if (maxTicks == 16777216 && timeStamp == 0 && lastRaw < (maxTicks - 32768))
+                {
+                    // Mid-range and then exactly zero: a record the firmware never
+                    // stamped. Hold the timeline and say so. LogAndStream
+                    // v1.00.x-v1.01.003 could emit one under SD write back-pressure;
+                    // read as a wrap it makes every later sample 512 seconds late.
+                    rejected = true;
+                }
+                else
+                {
+                    // Forward motion, which is a wrap when the raw value fell.
+                    LastReceivedTimeStamp += forward;
+                    CurrentTimeStampCycle = Math.Floor(LastReceivedTimeStamp / maxTicks);
+                }
             }
 
-            LastReceivedTimeStamp = (timeStamp + (TimeStampPacketRawMaxValue * CurrentTimeStampCycle));
             calibratedTimeStamp = LastReceivedTimeStamp / 32768 * 1000;   // to convert into mS
             if (FirstTimeCalTime)
             {
                 FirstTimeCalTime = false;
                 CalTimeStart = calibratedTimeStamp;
             }
-            if (LastReceivedCalibratedTimeStamp != -1)
+            if (LastReceivedCalibratedTimeStamp != -1 && !rejected)
             {
+                //A rejected sample carries the previous timestamp, so the difference
+                //here would be zero - a gap that never happened.
                 double timeDifference = calibratedTimeStamp - LastReceivedCalibratedTimeStamp;
                 double clockConstant = 1024;
                 if (HardwareVersion == (int)ShimmerBluetooth.ShimmerVersion.SHIMMER2R || HardwareVersion == (int)ShimmerBluetooth.ShimmerVersion.SHIMMER2)

@@ -38,12 +38,42 @@ namespace ShimmerAPI
             SHIMMER3R = 10,
             SHIMMER4SDK = 58
         }
+        /// <summary>
+        /// How far behind its predecessor a sample may sit and still be read as a
+        /// reordered packet rather than a counter roll-over. See
+        /// <see cref="TimestampUnwrap.ReorderWindowTicks"/> for why it is sized in
+        /// sample periods, and why an unknown rate must give zero rather than an
+        /// infinite window.
+        /// <para>
+        /// Derived on every sample rather than cached, so a rate written mid-session is
+        /// picked up by the next one and there is no stale window to reset.
+        /// <see cref="SamplingRate"/> defaults to zero, which disables the branch until
+        /// an inquiry or an SD header has set it.
+        /// </para>
+        /// <para>
+        /// Zero - reorder detection off - on Shimmer2 and Shimmer2R. Their tick domain
+        /// is not settled: this class divides their 16-bit counter by 1024 while the
+        /// Java driver divides by 32768, so a window derived from the rate would be
+        /// wrong in one of the two. Those devices keep the behaviour they have always
+        /// had; the invalid-zero rule never applied to a 2-byte counter anyway.
+        /// </para>
+        /// </summary>
+        protected virtual double GetReorderWindowTicks()
+        {
+            if (HardwareVersion == (int)ShimmerVersion.SHIMMER2 || HardwareVersion == (int)ShimmerVersion.SHIMMER2R)
+            {
+                return 0.0;
+            }
+            return TimestampUnwrap.ReorderWindowTicks(SamplingRate, TimeStampPacketRawMaxValue);
+        }
+
         protected double CalibrateTimeStamp(double timeStamp)
         {
             //first convert to continuous time stamp
             double calibratedTimeStamp = 0;
             TimestampUnwrap.Result unwrapped = TimestampUnwrap.Unwrap(
-                timeStamp, LastReceivedTimeStamp, CurrentTimeStampCycle, TimeStampPacketRawMaxValue);
+                timeStamp, LastReceivedTimeStamp, CurrentTimeStampCycle, TimeStampPacketRawMaxValue,
+                GetReorderWindowTicks());
 
             LastTimestampRejected = unwrapped.Rejected;
             CurrentTimeStampCycle = unwrapped.Cycle;

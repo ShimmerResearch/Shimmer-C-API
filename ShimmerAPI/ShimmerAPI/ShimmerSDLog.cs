@@ -227,9 +227,16 @@ public void ProcessSDLogHeader(byte[] byteArrayInfo)
         
         // 0-1 Byte = Sampling Rate (little-endian per original Java expression)
         long rawSamplingRate = byteArrayInfo[0] | (byteArrayInfo[1] << 8);
-        
 
-        SamplingRate = (32768 / rawSamplingRate);
+        // 32768.0, not 32768: both operands were integral, so this was integer
+        // division and the rate came out truncated - a divider of 65 gave 504 Hz
+        // rather than 504.123, and 640 gave 51 rather than 51.2. The error is small
+        // but it feeds the reorder window and any rate the caller reads back.
+        //
+        // The guard is for a blank or truncated header: a divider of zero threw
+        // DivideByZeroException here, taking out the whole import. Zero means "not
+        // known", which every rate consumer already handles.
+        SamplingRate = rawSamplingRate == 0 ? 0.0 : 32768.0 / rawSamplingRate;
 
         ParseEnabledDerivedSensorsForMaps(byteArrayInfo);
 

@@ -110,7 +110,8 @@ namespace TestSerialPort
             //Shared with the API rather than copied: a copy of this rule is how the
             //same defect ended up in four Shimmer host APIs at once.
             TimestampUnwrap.Result unwrapped = TimestampUnwrap.Unwrap(
-                timeStamp, LastReceivedTimeStamp, CurrentTimeStampCycle, (int)TimeStampPacketRawMaxValue);
+                timeStamp, LastReceivedTimeStamp, CurrentTimeStampCycle, (int)TimeStampPacketRawMaxValue,
+                TimestampUnwrap.ReorderWindowTicks(SamplingRate, (int)TimeStampPacketRawMaxValue));
             LastTimestampRejected = unwrapped.Rejected;
             CurrentTimeStampCycle = unwrapped.Cycle;
             LastReceivedTimeStamp = unwrapped.Unwrapped;
