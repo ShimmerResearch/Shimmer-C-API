@@ -466,6 +466,7 @@ namespace ShimmerAPI
             SET_MAG_SAMPLING_RATE_COMMAND = 0x3A,
             MAG_SAMPLING_RATE_RESPONSE = 0x3B,
             GET_MAG_SAMPLING_RATE_COMMAND = 0x3C,
+            NACK_COMMAND = 0xFE,
             ACK_COMMAND = 0xFF
         };
 
@@ -1238,6 +1239,51 @@ namespace ShimmerAPI
             TimerConnect.Stop();
         }
 
+        /// <summary>
+        /// The Shimmer answered a command with NACK (0xFE) rather than ACK: it has
+        /// refused that command, which is not the same as the link being gone.
+        /// </summary>
+        /// <remarks>
+        /// Before this existed a 0xFE fell through to the switch default. While
+        /// streaming that logged "Misaligned ByteStream Detected" and discarded the
+        /// packet in progress; otherwise it was dropped silently. Either way the
+        /// reply the caller was waiting for never arrived, ReadByte() carried on
+        /// timing out, and once StreamTimeOutCount passed 10 the API raised
+        /// "Connection lost" and disconnected - roughly ten seconds after a refusal
+        /// the device had already reported cleanly.
+        ///
+        /// The firmware refuses more than it used to: every command except
+        /// SET_SD_SYNC_COMMAND and ACK while SD sync is enabled, any SET while the
+        /// device is sensing, a sync-mode mismatch, an out-of-range InfoMem or
+        /// calibration write, and several commands it accepts but never implemented.
+        ///
+        /// Override to surface the refusal to the application; the notification
+        /// raised below is the default.
+        /// </remarks>
+        protected virtual void ProcessNackFromCommand()
+        {
+            System.Console.WriteLine("NACK Received - the Shimmer refused the command");
+
+            /* The NACK is the whole response packet, so the CRC bytes the firmware
+             * appended to it are still in the stream and would otherwise be read as
+             * the next packet header. */
+            if (BluetoothCRCMode != BTCRCMode.OFF)
+            {
+                for (int k = 0; k < (int)BluetoothCRCMode; k++)
+                {
+                    ReadByte();
+                }
+            }
+
+            /* A refused START_STREAMING never reaches SHIMMER_STATE_STREAMING, so
+             * clear the wait rather than leaving it set for the rest of the session. */
+            mWaitingForStartStreamingACK = false;
+
+            CustomEventArgs newEventArgs = new CustomEventArgs(
+                (int)ShimmerIdentifier.MSG_IDENTIFIER_NOTIFICATION_MESSAGE, "Command refused by the Shimmer");
+            OnNewEvent(newEventArgs);
+        }
+
         public void ReadData()
         {
             List<byte> buffer = new List<byte>();
@@ -1354,6 +1400,9 @@ namespace ShimmerAPI
 
                                     buffer.Clear();
                                 }
+                                break;
+                            case (byte)PacketTypeShimmer2.NACK_COMMAND:
+                                ProcessNackFromCommand();
                                 break;
                             case (byte)PacketTypeShimmer2.ACK_COMMAND:
                                 //Since the ack always proceeds the instreamcmd
@@ -1553,6 +1602,9 @@ namespace ShimmerAPI
                                 break;
                             case (byte)PacketTypeShimmer3.INTERNAL_EXP_POWER_ENABLE_RESPONSE:
                                 SetInternalExpPower(ReadByte());
+                                break;
+                            case (byte)PacketTypeShimmer2.NACK_COMMAND:
+                                ProcessNackFromCommand();
                                 break;
                             case (byte)PacketTypeShimmer2.ACK_COMMAND:
                                 System.Console.WriteLine("ACK Received");
