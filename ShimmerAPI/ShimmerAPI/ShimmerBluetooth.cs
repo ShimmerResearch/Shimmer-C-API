@@ -733,7 +733,8 @@ namespace ShimmerAPI
 			1000.000, 	//Range 2
 			3300.000};  //Range 3
 
-        // Equation breaks down below 683 for range 3
+        // Equation breaks down below 683 on every range: 683 is the first code above the 0.5 V
+        // amplifier reference at 3.0 V (see CalibrateGsrDataToResistanceWithOpenCircuitLimit)
         public static readonly int GSR_UNCAL_LIMIT_RANGE3 = 683;
 
         public static readonly double[,] SHIMMER3_GSR_RESISTANCE_MIN_MAX_KOHMS = new double[,] {
@@ -4195,7 +4196,7 @@ namespace ShimmerAPI
                         //Changed to new GSR algorithm using non inverting amp
                         //p1 = 0.0373;
                         //p2 = -24.9915;
-                        gsrResistanceKOhms = CalibrateGsrDataToResistanceFromAmplifierEq(datatemp, 0);
+                        gsrResistanceKOhms = CalibrateGsrDataToResistanceWithOpenCircuitLimit(datatemp, 0);
                     }
                     else if (GSRRange == 1 || newGSRRange == 1)
                     {
@@ -4204,7 +4205,7 @@ namespace ShimmerAPI
                         //Changed to new GSR algorithm using non inverting amp
                         //p1 = 0.0054;
                         //p2 = -3.5194;
-                        gsrResistanceKOhms = CalibrateGsrDataToResistanceFromAmplifierEq(datatemp, 1);
+                        gsrResistanceKOhms = CalibrateGsrDataToResistanceWithOpenCircuitLimit(datatemp, 1);
                     }
                     else if (GSRRange == 2 || newGSRRange == 2)
                     {
@@ -4213,7 +4214,7 @@ namespace ShimmerAPI
                         //Changed to new GSR algorithm using non inverting amp
                         //p1 = 0.0015;
                         //p2 = -1.0163;
-                        gsrResistanceKOhms = CalibrateGsrDataToResistanceFromAmplifierEq(datatemp, 2);
+                        gsrResistanceKOhms = CalibrateGsrDataToResistanceWithOpenCircuitLimit(datatemp, 2);
                     }
                     else if (GSRRange == 3 || newGSRRange == 3)
                     {
@@ -4222,11 +4223,7 @@ namespace ShimmerAPI
                         //Changed to new GSR algorithm using non inverting amp
                         //p1 = 4.5580e-04;
                         //p2 = -0.3014;
-                        if (datatemp < GSR_UNCAL_LIMIT_RANGE3)
-                        {
-                            datatemp = GSR_UNCAL_LIMIT_RANGE3;
-                        }
-                        gsrResistanceKOhms = CalibrateGsrDataToResistanceFromAmplifierEq(datatemp, 3);
+                        gsrResistanceKOhms = CalibrateGsrDataToResistanceWithOpenCircuitLimit(datatemp, 3);
                     }
                     //Changed to new GSR algorithm using non inverting amp
                     //datatemp = CalibrateGsrData(datatemp, p1, p2);
@@ -4560,29 +4557,25 @@ namespace ShimmerAPI
                         // the polynomial function used for calibration has been deprecated, it is replaced with a linear function
                         //p1 = 0.0373;
                         //p2 = -24.9915;
-                        gsrResistanceKOhms = CalibrateGsrDataToResistanceFromAmplifierEq(datatemp, 0);
+                        gsrResistanceKOhms = CalibrateGsrDataToResistanceWithOpenCircuitLimit(datatemp, 0);
                     }
                     else if (GSRRange == 1 || newGSRRange == 1)
                     {
                         //p1 = 0.0054;
                         //p2 = -3.5194;
-                        gsrResistanceKOhms = CalibrateGsrDataToResistanceFromAmplifierEq(datatemp, 1);
+                        gsrResistanceKOhms = CalibrateGsrDataToResistanceWithOpenCircuitLimit(datatemp, 1);
                     }
                     else if (GSRRange == 2 || newGSRRange == 2)
                     {
                         //p1 = 0.0015;
                         //p2 = -1.0163;
-                        gsrResistanceKOhms = CalibrateGsrDataToResistanceFromAmplifierEq(datatemp, 2);
+                        gsrResistanceKOhms = CalibrateGsrDataToResistanceWithOpenCircuitLimit(datatemp, 2);
                     }
                     else if (GSRRange == 3 || newGSRRange == 3)
                     {
                         //p1 = 4.5580e-04;
                         //p2 = -0.3014;
-                        if (datatemp < GSR_UNCAL_LIMIT_RANGE3)
-                        {
-                            datatemp = GSR_UNCAL_LIMIT_RANGE3;
-                        }
-                        gsrResistanceKOhms = CalibrateGsrDataToResistanceFromAmplifierEq(datatemp, 3);
+                        gsrResistanceKOhms = CalibrateGsrDataToResistanceWithOpenCircuitLimit(datatemp, 3);
                     }
                     //datatemp = CalibrateGsrData(datatemp, p1, p2);
                     gsrResistanceKOhms = NudgeGsrResistance(gsrResistanceKOhms, GSRRange);
@@ -7612,6 +7605,35 @@ namespace ShimmerAPI
             }
             double rSource = rFeedback / ((volts / 0.5) - 1.0);
             return rSource;
+        }
+
+        /// <summary>
+        /// CalibrateGsrDataToResistanceFromAmplifierEq, reading an open circuit as open on every range
+        /// (DEV-1070).
+        /// <para>
+        /// The amplifier equation has no positive solution at or below the amplifier's 0.5 V reference:
+        /// no skin resistance can pull the output under it, so a code there means the electrodes are
+        /// open. Range 3 has long raised such a code to GSR_UNCAL_LIMIT_RANGE3, the first code above the
+        /// reference, so that an open circuit decodes as thousands of MOhm. Ranges 0-2 did not, and in
+        /// auto-range they see these codes too. When the electrodes come off, the device climbs one range
+        /// at a time and repeats the sample that triggered each switch through the 80 ms settling time,
+        /// tagged with the range it was measured on. On ranges 0-2 the equation gave those samples a
+        /// negative resistance and conductance.
+        /// </para>
+        /// <para>
+        /// So a code below the limit decodes as range 3 at the limit, whatever range it was measured on,
+        /// and an open circuit reads the same on every range as the settled range 3 does. Codes at or
+        /// above the limit decode on their own range, as before. The Java driver and the Verisense
+        /// decoders apply the same rule.
+        /// </para>
+        /// </summary>
+        protected double CalibrateGsrDataToResistanceWithOpenCircuitLimit(double gsrUncalibratedData, int range)
+        {
+            if (gsrUncalibratedData < GSR_UNCAL_LIMIT_RANGE3)
+            {
+                return CalibrateGsrDataToResistanceFromAmplifierEq(GSR_UNCAL_LIMIT_RANGE3, 3);
+            }
+            return CalibrateGsrDataToResistanceFromAmplifierEq(gsrUncalibratedData, range);
         }
 
         protected void ReadMemCommand(int command, int address, int size)
