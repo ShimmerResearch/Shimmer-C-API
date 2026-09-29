@@ -678,6 +678,18 @@ namespace ShimmerBLEAPI.Devices
         /// <returns>return payload that varies based on request type</returns>
         public async Task<IBasePayload> ExecuteRequest(params Object[] reqObjects)
         {
+            // DEV-1096: the Bluetooth-off guard in the write below needs the firmware version, and
+            // Connect() writes an operational config before it reads the production config. So
+            // read it first, before this request's own state is set up - only for a write that
+            // turns Bluetooth off while no version is known.
+            if (reqObjects.Length == 2 && reqObjects[0] is RequestType firstRequestType
+                && firstRequestType == RequestType.WriteOperationalConfig
+                && reqObjects[1] is byte[] opConfigToWrite && ProdConfig == null
+                && EnforceBluetoothOffFirmwareGuard((byte[])opConfigToWrite.Clone()))
+            {
+                await ExecuteRequest(RequestType.ReadProductionConfig);
+            }
+
             int setCustomExecuteRequestTimeout = -1;
             NewCommandPayload = true;
             DataCommandBuffer = new DataChunkNew();
@@ -753,6 +765,7 @@ namespace ShimmerBLEAPI.Devices
                     {
                         request = await CreateWriteOpConfigRequest();
                     }
+                    KeepBluetoothOnIfFirmwareNeedsIt(request);
                     break;
                 case RequestType.WriteProductionConfig:
                     if (additionalBytesToWrite != null)
@@ -809,6 +822,7 @@ namespace ShimmerBLEAPI.Devices
                     break;
                 case RequestType.OperationalConfigWriteOnUnpairing:
                     request = await CreateWriteOpConfigRequestOnUnpairing();
+                    KeepBluetoothOnIfFirmwareNeedsIt(request);
                     break;
                 case RequestType.DFU:
                     request = DFUCommand;
@@ -1934,6 +1948,32 @@ namespace ShimmerBLEAPI.Devices
         protected async virtual Task<byte[]> CreateWriteOpConfigRequestOnUnpairing()
         {
             return null;
+        }
+
+        /// <summary>
+        /// DEV-1096: keep Bluetooth on in a write operational config request, header and all, if the
+        /// sensor's firmware cannot run without it (<see cref="VerisenseDevice.EnforceBluetoothOffFirmwareGuard"/>),
+        /// and log that it did. Every operational config write passes through here, the ones an
+        /// override of <see cref="CreateWriteOpConfigRequest"/> builds included.
+        /// </summary>
+        /// <param name="request">0x24, the 2-byte length, then the operational config; changed in place</param>
+        void KeepBluetoothOnIfFirmwareNeedsIt(byte[] request)
+        {
+            const int headerLength = 3;
+            if (request == null || request.Length <= headerLength)
+            {
+                return;
+            }
+            var opConfig = new byte[request.Length - headerLength];
+            Array.Copy(request, headerLength, opConfig, 0, opConfig.Length);
+            if (EnforceBluetoothOffFirmwareGuard(opConfig))
+            {
+                Array.Copy(opConfig, 0, request, headerLength, opConfig.Length);
+                var firmware = ProdConfig == null
+                    ? "of unknown version"
+                    : $"{ProdConfig.REV_FW_MAJOR}.{ProdConfig.REV_FW_MINOR}.{ProdConfig.REV_FW_INTERNAL}";
+                AdvanceLog(LogObject, "WriteOperationalConfig", $"Bluetooth kept on: firmware {firmware} loses USB with it off (DEV-1096)", ASMName);
+            }
         }
         #endregion
 

@@ -3104,6 +3104,16 @@ namespace BLE.Client.ViewModels
         }
         protected async void ConfigureDevice()
         {
+            // DEV-1096: firmware before V2.01.003 stops USB as well when Bluetooth is off, and the
+            // sensor is then unreachable. The API keeps Bluetooth on for that firmware; say why here.
+            if (!_bluetoothEnabled && !VerisenseBLEDevice.SupportsBluetoothOff())
+            {
+                BluetoothEnabled = true;
+                await CurrentPage.DisplayAlert("Bluetooth kept enabled",
+                    "This sensor's firmware cannot run with Bluetooth disabled: it would stop USB as well, and the sensor would be unreachable. " +
+                    "Update the sensor to firmware 2.1.3 or later to run it with Bluetooth disabled.", "OK");
+            }
+
             var clone = new VerisenseBLEDevice(VerisenseBLEDevice);
             clone.setLoggingEnabled(_deviceLogging);
             clone.setDeviceEnabled(_deviceEnabled);
