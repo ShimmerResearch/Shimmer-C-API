@@ -1,6 +1,7 @@
 using NUnit.Framework;
 using shimmer.Models;
 using ShimmerBLETests.Communications;
+using System;
 using System.Threading.Tasks;
 using static shimmer.Models.OpConfigPayload;
 
@@ -161,6 +162,69 @@ namespace ShimmerBLETests
             await device.ExecuteRequest(RequestType.WriteOperationalConfig, (byte[])defaultBytes.Clone());
             Assert.AreEqual(0, device.Radio.ProdConfigReads);
             Assert.IsTrue(BluetoothOnInRequest(device.Radio.LastOpConfigWriteRequest));
+        }
+
+        /// <summary>
+        /// A subclass that builds its own write requests, as ASM_BaseStation's sync service does
+        /// from the cloud's config
+        /// </summary>
+        class RequestBuildingDevice : TestVerisenseBLEDevice
+        {
+            public byte[] Config;
+
+            public RequestBuildingDevice(string id) : base(id, "")
+            {
+            }
+
+            static byte[] Request(byte[] config)
+            {
+                var request = new byte[config.Length + RequestHeaderLength];
+                request[0] = 0x24;
+                request[1] = (byte)(config.Length & 0xFF);
+                request[2] = (byte)(config.Length >> 8);
+                Array.Copy(config, 0, request, RequestHeaderLength, config.Length);
+                return request;
+            }
+
+            protected override Task<byte[]> CreateWriteOpConfigRequest()
+            {
+                return Task.FromResult(Request(Config));
+            }
+
+            protected override Task<byte[]> CreateWriteOpConfigRequestOnUnpairing()
+            {
+                return Task.FromResult(Request(Config));
+            }
+        }
+
+        async Task<RequestBuildingDevice> ConnectedRequestBuildingDevice(byte[] prodConfigResponse)
+        {
+            var device = new RequestBuildingDevice(uuid) { Config = BluetoothOffUsbOn() };
+            Assert.IsTrue(await device.Connect(false));
+            device.Radio.ProdConfigResponse = prodConfigResponse;
+            return device;
+        }
+
+        // Its bytes cannot be looked at before it is built, so a built request with no version known
+        // reads the production config first, whatever it holds.
+        [TestCase(RequestType.WriteOperationalConfig)]
+        [TestCase(RequestType.OperationalConfigWriteOnUnpairing)]
+        public async Task ABuiltRequestKeepsBluetoothOnForV2_01_002(RequestType requestType)
+        {
+            var device = await ConnectedRequestBuildingDevice(ProdConfigReporting(2, 1, 2));
+            await device.ExecuteRequest(requestType);
+            Assert.AreEqual(1, device.Radio.ProdConfigReads);
+            Assert.IsTrue(BluetoothOnInRequest(device.Radio.LastOpConfigWriteRequest));
+        }
+
+        [TestCase(RequestType.WriteOperationalConfig)]
+        [TestCase(RequestType.OperationalConfigWriteOnUnpairing)]
+        public async Task ABuiltRequestLetsBluetoothOffThroughForV2_01_003(RequestType requestType)
+        {
+            var device = await ConnectedRequestBuildingDevice(ProdConfigReporting(2, 1, 3));
+            await device.ExecuteRequest(requestType);
+            Assert.AreEqual(1, device.Radio.ProdConfigReads);
+            Assert.IsFalse(BluetoothOnInRequest(device.Radio.LastOpConfigWriteRequest));
         }
     }
 }

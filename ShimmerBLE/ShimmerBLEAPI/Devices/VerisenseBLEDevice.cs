@@ -678,14 +678,13 @@ namespace ShimmerBLEAPI.Devices
         /// <returns>return payload that varies based on request type</returns>
         public async Task<IBasePayload> ExecuteRequest(params Object[] reqObjects)
         {
-            // DEV-1096: the Bluetooth-off guard in the write below needs the firmware version, and
-            // Connect() writes an operational config before it reads the production config. So
-            // read it first, before this request's own state is set up - only for a write that
-            // turns Bluetooth off while no version is known.
-            if (reqObjects.Length == 2 && reqObjects[0] is RequestType firstRequestType
-                && firstRequestType == RequestType.WriteOperationalConfig
-                && reqObjects[1] is byte[] opConfigToWrite && ProdConfig == null
-                && EnforceBluetoothOffFirmwareGuard((byte[])opConfigToWrite.Clone()))
+            // DEV-1096: the Bluetooth-off guard in the writes below needs the firmware version, and
+            // not every caller reads the production config first: Connect() writes an operational
+            // config before it does. So read it now, before this request's own state is set up,
+            // for any operational config write that might turn Bluetooth off while no version is
+            // known.
+            if (ProdConfig == null && reqObjects.Length >= 1 && reqObjects[0] is RequestType firstRequestType
+                && MightTurnBluetoothOff(firstRequestType, reqObjects.Length == 2 ? reqObjects[1] as byte[] : null))
             {
                 await ExecuteRequest(RequestType.ReadProductionConfig);
             }
@@ -1948,6 +1947,24 @@ namespace ShimmerBLEAPI.Devices
         protected async virtual Task<byte[]> CreateWriteOpConfigRequestOnUnpairing()
         {
             return null;
+        }
+
+        /// <summary>
+        /// Whether a request might write an operational config that turns Bluetooth off. One that
+        /// <see cref="CreateWriteOpConfigRequest"/> or <see cref="CreateWriteOpConfigRequestOnUnpairing"/>
+        /// will build cannot be looked at yet, so it might.
+        /// </summary>
+        bool MightTurnBluetoothOff(RequestType requestType, byte[] opConfig)
+        {
+            switch (requestType)
+            {
+                case RequestType.WriteOperationalConfig:
+                    return opConfig == null || EnforceBluetoothOffFirmwareGuard((byte[])opConfig.Clone());
+                case RequestType.OperationalConfigWriteOnUnpairing:
+                    return true;
+                default:
+                    return false;
+            }
         }
 
         /// <summary>
