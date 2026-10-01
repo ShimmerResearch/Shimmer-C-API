@@ -22,7 +22,16 @@ namespace shimmer.Sensors
         protected SensorSetting GSROversamplingRateSetting = Sensor.UnknownSetting;
         public const double LIMIT_FOR_MINIMUM_VALID_GSR_CONDUCTANCE_US = 0.03;
         public const int GSR_UNCAL_LIMIT_RANGE3_SR62 = 683;
-        public const int GSR_UNCAL_LIMIT_RANGE3_SR68 = 1134;
+        /// <summary>
+        /// Range-3 codes below this are raised to it before calibration so that an open circuit
+        /// reads as open, which only works if the limit is above the amplifier reference. 1138 is
+        /// the first code above 0.5 V at the SR68's 1.8 V full scale (0.5 V = code 1137.5), so it
+        /// also clears the 0.4986 V that CalibrateGsrDataToKOhmsUsingAmplifierEq divides by (code
+        /// 1134.3); the Java driver divides by 0.5 V, and 1138 is correct under both. It was 1134,
+        /// the last code below 0.4986 V: that decoded to a negative resistance, nudged to 8 kOhm,
+        /// so an open circuit read 125 uS and counted as Connected (DEV-1067).
+        /// </summary>
+        public const int GSR_UNCAL_LIMIT_RANGE3_SR68 = 1138;
 
         /// <summary>
         /// GSR range setting
