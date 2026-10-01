@@ -423,6 +423,9 @@ namespace ShimmerAPI
                         StreamingACKReceived = false;
                         LastReceivedTimeStamp = 0;
                         CurrentTimeStampCycle = 0;
+                        //A stream start: the next sample is the first one, and the pair
+                        //above cannot say so on their own.
+                        HasPreviousTimeStamp = false;
                         LastReceivedCalibratedTimeStamp = -1;
                         FirstTimeCalTime = true;
                         PacketLossCount = 0;
