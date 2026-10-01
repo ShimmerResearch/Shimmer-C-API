@@ -146,6 +146,11 @@ namespace ShimmerAPI
         protected int ExpansionBoardId;
         protected int ExpansionBoardRev;
         protected int ExpansionBoardRevSpecial;
+        /// <summary>
+        /// Pressure sensor fitted (PRESSURE_SENSOR_BMP180/BMP280/BMP390/BMP581). Set from the sensor ID in the 0xA6 response, or
+        /// on a Shimmer3R from the SR number when the device does not report it (see isShimmer3RwithBmp581()). PRESSURE_SENSOR_UNKNOWN until then.
+        /// </summary>
+        public int PressureSensorId { get; protected set; } = PRESSURE_SENSOR_UNKNOWN;
         protected double BatteryVoltage;
         protected int ChargingStatus;
         protected virtual bool ShouldAddSystemTimestamp => true;
@@ -213,6 +218,15 @@ namespace ShimmerAPI
         public const sbyte BMP3_W_MAX_TEMP = 4;
         public const sbyte BMP3_W_MIN_PRES = 5;
         public const sbyte BMP3_W_MAX_PRES = 6;
+
+        //Pressure sensor IDs reported in the PRESSURE_CALIBRATION_COEFFICIENTS_RESPONSE (0xA6), see log-and-stream-common Comms/shimmer_bt_uart.c
+        public const int PRESSURE_SENSOR_UNKNOWN = -1;
+        public const int PRESSURE_SENSOR_BMP180 = 0;
+        public const int PRESSURE_SENSOR_BMP280 = 1;
+        public const int PRESSURE_SENSOR_BMP390 = 2;
+        public const int PRESSURE_SENSOR_BMP581 = 3;
+        //Number of calibration coefficient bytes that follow the sensor ID in the 0xA6 response, indexed by sensor ID. The BMP581 outputs compensated data so it has none.
+        protected static readonly int[] PRESSURE_SENSOR_CALIB_BYTES_LENGTH = { 22, 24, 21, 0 };
 
         public double OffsetECGRALL = 2060;
         public double GainECGRALL = 175;
@@ -625,6 +639,7 @@ namespace ShimmerAPI
         public static readonly String[] LIST_OF_MAG_RANGE_SHIMMER3R = { "+/- 4Ga", "+/- 8Ga", "+/- 12Ga", "+/- 16Ga" };
         public static readonly String[] LIST_OF_PRESSURE_RESOLUTION_SHIMMER3 = { "Low", "Standard", "High", "Very High" };
         public static readonly String[] LIST_OF_PRESSURE_RESOLUTION_SHIMMER3R = { "Ultra Low", "Low", "Standard", "High", "Ultra High", "Highest" };
+        public static readonly String[] LIST_OF_PRESSURE_RESOLUTION_SHIMMER3R_BMP581 = { "Lowest Power", "Low", "Standard", "High", "High Res", "Very High Res", "Ultra High Res", "Highest Res" };
         public static readonly String[] LIST_OF_GSR_RANGE = { "8kOhm to 63kOhm", "63kOhm to 220kOhm", "220kOhm to 680kOhm", "680kOhm to 4.7MOhm", "Auto Range" };
         public static readonly String[] LIST_OF_EXG_GAINS_SHIMMER3 = new string[] { "1", "2", "3", "4", "6", "8", "12" };
 
@@ -1711,44 +1726,16 @@ namespace ShimmerAPI
 
                                 break;
                             case (byte)PacketTypeShimmer3RSDBT.PRESSURE_CALIBRATION_COEFFICIENTS_RESPONSE:
-
-                                byte[] length_chipidbytes = new byte[2];
-
-                                for (int m = 0; m < 2; m++)
+                                //[length = 1 + n][sensor ID][n calibration bytes]. Consume exactly the number of bytes the length declares so
+                                //that a response which does not match its sensor ID is rejected without desynchronising the stream.
+                                int pressureCalibLength = ReadByte();
+                                bufferbyte = new byte[1 + pressureCalibLength];
+                                bufferbyte[0] = (byte)pressureCalibLength;
+                                for (int p = 1; p <= pressureCalibLength; p++)
                                 {
-                                    length_chipidbytes[m] = (byte)ReadByte();
+                                    bufferbyte[p] = (byte)ReadByte();
                                 }
-
-                                if (length_chipidbytes[1] == 0) //bmp180
-                                {
-                                    bufferbyte = new byte[22];
-                                    for (int p = 0; p < 22; p++)
-                                    {
-                                        bufferbyte[p] = (byte)ReadByte();
-                                    }
-                                    CalculateBMP180PressureCalibrationCoefficientsResponse(bufferbyte);
-
-                                }
-                                else if (length_chipidbytes[1] == 1)    //bmp280
-                                {
-                                    bufferbyte = new byte[24];
-                                    for (int p = 0; p < 24; p++)
-                                    {
-                                        bufferbyte[p] = (byte)ReadByte();
-                                    }
-                                    CalculateBMP280PressureCalibrationCoefficientsResponse(bufferbyte);
-
-                                }
-                                else if (length_chipidbytes[1] == 2)    //bmp390
-                                {
-                                    bufferbyte = new byte[21];
-                                    for (int p = 0; p < 21; p++)
-                                    {
-                                        bufferbyte[p] = (byte)ReadByte();
-                                    }
-                                    CalculateBMP390PressureCalibrationCoefficientsResponse(bufferbyte);
-                                }
-
+                                InterpretPressureCalibrationCoefficientsResponse(bufferbyte);
                                 break;
                             case (byte)PacketTypeShimmer2.BLINK_LED_RESPONSE:
                                 bufferbyte = new byte[1];
@@ -1927,6 +1914,51 @@ namespace ShimmerAPI
             CloseConnection();
 
         }
+        /// <summary>
+        /// Interprets the payload of a PRESSURE_CALIBRATION_COEFFICIENTS_RESPONSE (0xA6), i.e. the bytes following the response ID:
+        /// [length = 1 + n][sensor ID][n calibration bytes], where n is 22 (BMP180), 24 (BMP280), 21 (BMP390) or 0 (BMP581).
+        /// See log-and-stream-common Comms/shimmer_bt_uart.c (GET_PRESSURE_CALIBRATION_COEFFICIENTS_COMMAND).
+        /// A response whose length does not match its sensor ID is rejected and PressureSensorId is left unchanged.
+        /// </summary>
+        /// <param name="payload">The length byte followed by the number of bytes it declares</param>
+        /// <returns>True if the sensor ID was recognised and the response was the expected length for it</returns>
+        public bool InterpretPressureCalibrationCoefficientsResponse(byte[] payload)
+        {
+            if (payload == null || payload.Length < 2 || payload[0] != payload.Length - 1)
+            {
+                Debug.WriteLine("Pressure calibration response rejected: malformed length");
+                return false;
+            }
+
+            int sensorId = payload[1];
+            int numCalibBytes = payload.Length - 2;
+            if (sensorId >= PRESSURE_SENSOR_CALIB_BYTES_LENGTH.Length || numCalibBytes != PRESSURE_SENSOR_CALIB_BYTES_LENGTH[sensorId])
+            {
+                Debug.WriteLine("Pressure calibration response rejected: sensor ID " + sensorId + " with " + numCalibBytes + " calibration bytes");
+                return false;
+            }
+
+            byte[] calibBytes = new byte[numCalibBytes];
+            Array.Copy(payload, 2, calibBytes, 0, numCalibBytes);
+            if (sensorId == PRESSURE_SENSOR_BMP180)
+            {
+                CalculateBMP180PressureCalibrationCoefficientsResponse(calibBytes);
+            }
+            else if (sensorId == PRESSURE_SENSOR_BMP280)
+            {
+                CalculateBMP280PressureCalibrationCoefficientsResponse(calibBytes);
+            }
+            else if (sensorId == PRESSURE_SENSOR_BMP390)
+            {
+                CalculateBMP390PressureCalibrationCoefficientsResponse(calibBytes);
+            }
+            //BMP581: no calibration coefficients, the sensor outputs compensated data
+
+            //The in-band sensor ID overrides any SR number based assumption
+            PressureSensorId = sensorId;
+            return true;
+        }
+
         public void CalculateBMP180PressureCalibrationCoefficientsResponse(byte[] bufferbyte)
         {
             AC1 = Calculatetwoscomplement((int)((int)(bufferbyte[1] & 0xFF) + ((int)(bufferbyte[0] & 0xFF) << 8)), 16);
@@ -2328,6 +2360,60 @@ namespace ShimmerAPI
             {
                 return false;
             }
+        }
+
+        /// <summary>
+        /// SR number rule for a BMP581 in place of the BMP390 (DEV-818), used when the device does not report its pressure sensor in-band
+        /// (0xA7 NACKed by LogAndStream v1.01.006 or not answered) and for SD log files, whose header carries no sensor ID.
+        /// Mirrors ShimBrd_isBmp581PresentPerSrNumber() in log-and-stream-common Boards/shimmer_boards.c:
+        /// SR31-11-2, SR38-4-2, SR47-8-2, SR48-7-2 up to (not including) SR48-8-0, SR48-8-2, SR49-4-2 and later revs.
+        /// SR48-8-0 and SR48-8-1 carry the BMP390. BMP581 support starts at LogAndStream v1.01.006.
+        /// </summary>
+        public Boolean isShimmer3RwithBmp581()
+        {
+            if ((HardwareVersion == (int)ShimmerBluetooth.ShimmerVersion.SHIMMER3R)
+                && compareVersions(FW_IDENTIFIER_LOGANDSTREAM, 1, 1, 6) && (
+                isExpansionBoardSrNumberGte((int)ExpansionBoardDetectShimmer3.SHIMMER3, 11, 2)
+                || isExpansionBoardSrNumberGte((int)ExpansionBoardDetectShimmer3.EXPANSION_PROTO3_DELUXE, 4, 2)
+                || isExpansionBoardSrNumberGte((int)ExpansionBoardDetectShimmer3.EXP_BRD_EXG_UNIFIED, 8, 2)
+                || (isExpansionBoardSrNumberGte((int)ExpansionBoardDetectShimmer3.EXP_BRD_GSR_UNIFIED, 7, 2)
+                    && !isExpansionBoardSrNumberGte((int)ExpansionBoardDetectShimmer3.EXP_BRD_GSR_UNIFIED, 8, 0))
+                || isExpansionBoardSrNumberGte((int)ExpansionBoardDetectShimmer3.EXP_BRD_GSR_UNIFIED, 8, 2)
+                || isExpansionBoardSrNumberGte((int)ExpansionBoardDetectShimmer3.EXP_BRD_BR_AMP_UNIFIED, 4, 2)))
+            {
+                return true;
+            }
+            else
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// True if the expansion board is srId and its rev.revSpecial is at least rev.revSpecial (rev compared first).
+        /// Mirrors ShimBrd_isBoardSrNumberGte() in log-and-stream-common Boards/shimmer_boards.c.
+        /// </summary>
+        protected Boolean isExpansionBoardSrNumberGte(int srId, int rev, int revSpecial)
+        {
+            return ExpansionBoardId == srId
+                && (ExpansionBoardRev > rev || (ExpansionBoardRev == rev && ExpansionBoardRevSpecial >= revSpecial));
+        }
+
+        /// <summary>
+        /// True if the pressure sensor is a BMP581. Uses the sensor ID reported by the device and, if none has been received,
+        /// the SR number rule (isShimmer3RwithBmp581()).
+        /// </summary>
+        public Boolean isBmp581InUse()
+        {
+            if (HardwareVersion != (int)ShimmerBluetooth.ShimmerVersion.SHIMMER3R)
+            {
+                return false;
+            }
+            if (PressureSensorId == PRESSURE_SENSOR_UNKNOWN)
+            {
+                return isShimmer3RwithBmp581();
+            }
+            return PressureSensorId == PRESSURE_SENSOR_BMP581;
         }
 
 
@@ -4140,7 +4226,14 @@ namespace ShimmerAPI
                             UT = (double)newPacket[iUT];
                             UP = (double)newPacket[iUP];
                             double[] datatemp = new double[2] { newPacket[iUP], newPacket[iUT] };
-                            bmpX80caldata = CalibratePressure390SensorData(UP, UT);
+                            if (isBmp581InUse())
+                            {
+                                bmpX80caldata = CalibratePressure581SensorData(UP, UT);
+                            }
+                            else
+                            {
+                                bmpX80caldata = CalibratePressure390SensorData(UP, UT);
+                            }
                         }
                         else
                         {
@@ -6237,8 +6330,16 @@ namespace ShimmerAPI
             }
             else if (HardwareVersion == (int)ShimmerVersion.SHIMMER3R)
             {
+                PressureSensorId = PRESSURE_SENSOR_UNKNOWN;
                 WriteBytes(new byte[1] { (byte)PacketTypeShimmer3RSDBT.GET_PRESSURE_CALIBRATION_COEFFICIENTS_COMMAND }, 0, 1);
                 System.Threading.Thread.Sleep(800);
+                //No sensor ID received: LogAndStream v1.01.006 NACKs this command on a BMP581 (a NACK is otherwise ignored by the
+                //read thread) or there was no reply. Fall back to the SR number rule. A late in-band reply still overrides this.
+                if (PressureSensorId == PRESSURE_SENSOR_UNKNOWN)
+                {
+                    PressureSensorId = isShimmer3RwithBmp581() ? PRESSURE_SENSOR_BMP581 : PRESSURE_SENSOR_BMP390;
+                    Debug.WriteLine("No pressure sensor ID received, assuming " + (PressureSensorId == PRESSURE_SENSOR_BMP581 ? "BMP581" : "BMP390") + " from the SR number");
+                }
             }
         }
 
@@ -6489,8 +6590,9 @@ namespace ShimmerAPI
         /// <summary>
         /// This is to set the pressure resolution of the BMP180 Pressure sensor on the Shimmer3. There are four different settings 0,1,2,3 with 0 being the lowest resolution and 3 the highest.
         /// This is to set the pressure resolution of the BMP390 Pressure sensor on the Shimmer3R. There are four different settings 0,1,2,3,4,5 with 0 being the lowest resolution and 5 the highest.
+        /// On a Shimmer3R with a BMP581 (see isBmp581InUse()) there are eight settings, 0-7. The firmware replaces an out of range setting with 0.
         /// </summary>
-        /// <param name="setting">A value between 0 and 3, 3 being highest resolution and 0 lowest for Shimmer3, and 0-5 for Shimmer3R</param>
+        /// <param name="setting">A value between 0 and 3, 3 being highest resolution and 0 lowest for Shimmer3, 0-5 for Shimmer3R (BMP390) and 0-7 for Shimmer3R (BMP581)</param>
         public void WritePressureResolution(int setting)
         {
             if (HardwareVersion == (int)ShimmerVersion.SHIMMER3 || HardwareVersion == (int)ShimmerVersion.SHIMMER3R)
@@ -7440,6 +7542,30 @@ namespace ShimmerAPI
             caldata[0] = compPress;
             caldata[1] = Bmp3QuantizedCalibData_TLin;
             return caldata;
+        }
+
+        /// <summary>
+        /// The BMP581 outputs compensated data, so there are no calibration coefficients (BST-BMP581-DS004):
+        /// pressure (Pa) = unsigned 24-bit / 64, temperature (degC) = signed 24-bit / 65536.
+        /// The temperature channel is parsed as u24, so it is sign extended here, otherwise sub-zero readings decode as ~255 degC (DEV-1102).
+        /// </summary>
+        /// <returns>{pressure in Pa, temperature in degC}</returns>
+        protected double[] CalibratePressure581SensorData(double UP, double UT)
+        {
+            double[] caldata = new double[2];
+            caldata[0] = UP / 64.0;
+            caldata[1] = SignExtend24(UT) / 65536.0;
+            return caldata;
+        }
+
+        /// <summary>
+        /// Reads a 24-bit field as two's complement. Masks to 24 bits first, so a value that is already signed passes through unchanged.
+        /// </summary>
+        /// <returns>The signed value, -2^23 to 2^23-1</returns>
+        public static double SignExtend24(double raw)
+        {
+            long bits = ((long)raw) & 0xFFFFFFL;
+            return (bits & 0x800000L) != 0 ? bits - 0x1000000L : bits;
         }
 
         // Method to compute power, equivalent to pow_bmp3 function in C

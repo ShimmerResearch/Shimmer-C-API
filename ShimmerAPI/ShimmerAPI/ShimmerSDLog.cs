@@ -418,7 +418,17 @@ public void ProcessSDLogHeader(byte[] byteArrayInfo)
 
         if (HardwareVersion == (int)ShimmerVersion.SHIMMER3R)
         {
+            //The SD header carries no pressure sensor ID and, for a BMP581, the calibration region is not written
+            //(log-and-stream-common SDCard/shimmer_sd_header.c), so use the SR number rule from the header's HW/FW/expansion board fields
+            if (isShimmer3RwithBmp581())
+            {
+                PressureSensorId = PRESSURE_SENSOR_BMP581;
+            }
+            else
+            {
+                PressureSensorId = PRESSURE_SENSOR_BMP390;
                 CalculateBMP390PressureCalibrationCoefficientsResponse(pressureCalRawParams);
+            }
         }
         else
         {
