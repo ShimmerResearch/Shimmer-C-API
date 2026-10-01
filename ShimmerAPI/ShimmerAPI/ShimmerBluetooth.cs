@@ -149,6 +149,8 @@ namespace ShimmerAPI
         /// <summary>
         /// Pressure sensor fitted (PRESSURE_SENSOR_BMP180/BMP280/BMP390/BMP581). Set from the sensor ID in the 0xA6 response, or
         /// on a Shimmer3R from the SR number when the device does not report it (see isShimmer3RwithBmp581()). PRESSURE_SENSOR_UNKNOWN until then.
+        /// An SD log sets it from the header (see ShimmerSDLog), where it can also be PRESSURE_SENSOR_NONE or an ID this API does not recognise;
+        /// the pressure channels are then output uncalibrated (see GetPressureSensorInUse()).
         /// </summary>
         public int PressureSensorId { get; protected set; } = PRESSURE_SENSOR_UNKNOWN;
         protected double BatteryVoltage;
@@ -225,6 +227,8 @@ namespace ShimmerAPI
         public const int PRESSURE_SENSOR_BMP280 = 1;
         public const int PRESSURE_SENSOR_BMP390 = 2;
         public const int PRESSURE_SENSOR_BMP581 = 3;
+        //No pressure sensor fitted, as recorded in the SD header (log-and-stream-common SDCard/shimmer_sd_header.h SDH_PRESSURE_SENSOR_ID)
+        public const int PRESSURE_SENSOR_NONE = 0xFE;
         //Number of calibration coefficient bytes that follow the sensor ID in the 0xA6 response, indexed by sensor ID. The BMP581 outputs compensated data so it has none.
         protected static readonly int[] PRESSURE_SENSOR_CALIB_BYTES_LENGTH = { 22, 24, 21, 0 };
 
@@ -2364,7 +2368,7 @@ namespace ShimmerAPI
 
         /// <summary>
         /// SR number rule for a BMP581 in place of the BMP390 (DEV-818), used when the device does not report its pressure sensor in-band
-        /// (0xA7 NACKed by LogAndStream v1.01.006 or not answered) and for SD log files, whose header carries no sensor ID.
+        /// (0xA7 NACKed by LogAndStream v1.01.006 or not answered) and for SD log files whose header does not record the sensor ID.
         /// Mirrors ShimBrd_isBmp581PresentPerSrNumber() in log-and-stream-common Boards/shimmer_boards.c:
         /// SR31-11-2, SR38-4-2, SR47-8-2, SR48-7-2 up to (not including) SR48-8-0, SR48-8-2, SR49-4-2 and later revs.
         /// SR48-8-0 and SR48-8-1 carry the BMP390. BMP581 support starts at LogAndStream v1.01.006.
@@ -2414,6 +2418,33 @@ namespace ShimmerAPI
                 return isShimmer3RwithBmp581();
             }
             return PressureSensorId == PRESSURE_SENSOR_BMP581;
+        }
+
+        /// <summary>
+        /// The pressure sensor whose calibration applies: PressureSensorId once it is known, otherwise GetPressureSensorFromBoardRules().
+        /// Anything other than PRESSURE_SENSOR_BMP180/BMP280/BMP390/BMP581 (PRESSURE_SENSOR_NONE, or a sensor ID this API does not recognise)
+        /// means no calibration applies, and the pressure and temperature channels are output uncalibrated.
+        /// </summary>
+        protected int GetPressureSensorInUse()
+        {
+            if (PressureSensorId != PRESSURE_SENSOR_UNKNOWN)
+            {
+                return PressureSensorId;
+            }
+            return GetPressureSensorFromBoardRules();
+        }
+
+        /// <summary>
+        /// The pressure sensor the board rules give when the device does not report one: the SR number rule (isShimmer3RwithBmp581()) on a
+        /// Shimmer3R, and isShimmer3withUpdatedSensors() (BMP280, otherwise BMP180) on a Shimmer3.
+        /// </summary>
+        protected int GetPressureSensorFromBoardRules()
+        {
+            if (HardwareVersion == (int)ShimmerBluetooth.ShimmerVersion.SHIMMER3R)
+            {
+                return isShimmer3RwithBmp581() ? PRESSURE_SENSOR_BMP581 : PRESSURE_SENSOR_BMP390;
+            }
+            return isShimmer3withUpdatedSensors() ? PRESSURE_SENSOR_BMP280 : PRESSURE_SENSOR_BMP180;
         }
 
 
@@ -4212,40 +4243,39 @@ namespace ShimmerAPI
 
                 if (((EnabledSensors & (int)SensorBitmapShimmer3.SENSOR_BMP180_PRESSURE) > 0))
                 {
-                    double[] bmpX80caldata = new double[2];
+                    //Stays null for no sensor fitted or an unrecognised sensor ID (SD log), whose channels are output uncalibrated
+                    double[] bmpX80caldata = null;
                     int iUP = getSignalIndex(Shimmer3Configuration.SignalNames.PRESSURE);
                     int iUT = getSignalIndex(Shimmer3Configuration.SignalNames.TEMPERATURE);
                     double UP;
                     double UT;
+                    int pressureSensor = GetPressureSensorInUse();
 
-                    if (isShimmer3withUpdatedSensors())
+                    if (pressureSensor == PRESSURE_SENSOR_BMP390 || pressureSensor == PRESSURE_SENSOR_BMP581)
                     {
-                        if (HardwareVersion == (int)ShimmerBluetooth.ShimmerVersion.SHIMMER3R)
+                        //CA-124
+                        UT = (double)newPacket[iUT];
+                        UP = (double)newPacket[iUP];
+                        double[] datatemp = new double[2] { newPacket[iUP], newPacket[iUT] };
+                        if (pressureSensor == PRESSURE_SENSOR_BMP581)
                         {
-                            //CA-124
-                            UT = (double)newPacket[iUT];
-                            UP = (double)newPacket[iUP];
-                            double[] datatemp = new double[2] { newPacket[iUP], newPacket[iUT] };
-                            if (isBmp581InUse())
-                            {
-                                bmpX80caldata = CalibratePressure581SensorData(UP, UT);
-                            }
-                            else
-                            {
-                                bmpX80caldata = CalibratePressure390SensorData(UP, UT);
-                            }
+                            bmpX80caldata = CalibratePressure581SensorData(UP, UT);
                         }
                         else
                         {
-                            UT = (double)newPacket[iUT];
-                            UP = (double)newPacket[iUP];
-                            UT = UT * Math.Pow(2, 4);
-                            UP = UP / Math.Pow(2, 4);
-                            double[] datatemp = new double[2] { newPacket[iUP], newPacket[iUT] };
-                            bmpX80caldata = CalibratePressure280SensorData(UP, UT);
+                            bmpX80caldata = CalibratePressure390SensorData(UP, UT);
                         }
                     }
-                    else
+                    else if (pressureSensor == PRESSURE_SENSOR_BMP280)
+                    {
+                        UT = (double)newPacket[iUT];
+                        UP = (double)newPacket[iUP];
+                        UT = UT * Math.Pow(2, 4);
+                        UP = UP / Math.Pow(2, 4);
+                        double[] datatemp = new double[2] { newPacket[iUP], newPacket[iUT] };
+                        bmpX80caldata = CalibratePressure280SensorData(UP, UT);
+                    }
+                    else if (pressureSensor == PRESSURE_SENSOR_BMP180)
                     {
                         UT = (double)newPacket[iUT];
                         UP = (double)newPacket[iUP];
@@ -4255,9 +4285,15 @@ namespace ShimmerAPI
                     }
 
                     objectCluster.Add(Shimmer3Configuration.SignalNames.PRESSURE, ShimmerConfiguration.SignalFormats.RAW, ShimmerConfiguration.SignalUnits.NoUnits, newPacket[iUP]);
-                    objectCluster.Add(Shimmer3Configuration.SignalNames.PRESSURE, ShimmerConfiguration.SignalFormats.CAL, ShimmerConfiguration.SignalUnits.KiloPascal, bmpX80caldata[0] / 1000);
+                    if (bmpX80caldata != null)
+                    {
+                        objectCluster.Add(Shimmer3Configuration.SignalNames.PRESSURE, ShimmerConfiguration.SignalFormats.CAL, ShimmerConfiguration.SignalUnits.KiloPascal, bmpX80caldata[0] / 1000);
+                    }
                     objectCluster.Add(Shimmer3Configuration.SignalNames.TEMPERATURE, ShimmerConfiguration.SignalFormats.RAW, ShimmerConfiguration.SignalUnits.NoUnits, newPacket[iUT]);
-                    objectCluster.Add(Shimmer3Configuration.SignalNames.TEMPERATURE, ShimmerConfiguration.SignalFormats.CAL, ShimmerConfiguration.SignalUnits.Celcius, bmpX80caldata[1]);
+                    if (bmpX80caldata != null)
+                    {
+                        objectCluster.Add(Shimmer3Configuration.SignalNames.TEMPERATURE, ShimmerConfiguration.SignalFormats.CAL, ShimmerConfiguration.SignalUnits.Celcius, bmpX80caldata[1]);
+                    }
                 }
                 if (((EnabledSensors & (int)SensorBitmapShimmer3.SENSOR_GSR) > 0))
                 {
