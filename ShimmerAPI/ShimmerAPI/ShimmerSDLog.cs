@@ -2,6 +2,7 @@
 using ShimmerAPI.Utilities;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -78,6 +79,22 @@ namespace ShimmerAPI
         private string MacAddress = "";
         private long mSampleCount = 0;
         public Boolean EndOfFile = false;
+        //Pressure sensor ID in the SD header (log-and-stream-common SDCard/shimmer_sd_header.h SDH_PRESSURE_SENSOR_ID), recorded from LogAndStream
+        //v1.01.006 on Shimmer3 and v1.01.018 on Shimmer3R. Bits 0-6 = PRESSURE_SENSOR_* ID, bit 7 = inferred from the SR number rather than confirmed
+        //by chip ID, PRESSURE_SENSOR_NONE (0xFE) = no sensor fitted, 0xFF = not recorded (older firmware leaves the header's 0xFF fill).
+        private const int SDH_PRESSURE_SENSOR_ID = 224;
+        private const int SDH_PRESSURE_SENSOR_INFERRED = 0x80;
+        private const int SDH_PRESSURE_SENSOR_NOT_RECORDED = 0xFF;
+        private readonly List<string> mPressureSensorWarnings = new List<string>();
+        /// <summary>
+        /// True if the SD header records that the firmware inferred the pressure sensor from the SR number because its chip ID check was inconclusive
+        /// </summary>
+        public bool PressureSensorInferred { get; private set; } = false;
+        /// <summary>
+        /// Warnings about the pressure sensor raised while parsing the SD header (also written to Debug): the sensor was inferred rather than confirmed
+        /// by chip ID, or pressure and temperature are output uncalibrated because the sensor ID is unrecognised or no sensor is fitted
+        /// </summary>
+        public IReadOnlyList<string> PressureSensorWarnings => mPressureSensorWarnings;
         protected override bool ShouldAddSystemTimestamp => false;
         public ShimmerSDLog(string filePath)
         {
@@ -411,36 +428,23 @@ public void ProcessSDLogHeader(byte[] byteArrayInfo)
         
         byte[] pressureCalRawParams = new byte[24];
         Buffer.BlockCopy(byteArrayInfo, indexTempPres, pressureCalRawParams, 0, 22);
-        if (isShimmer3withUpdatedSensors())
+
+        SetPressureSensorIdFromSdHeader(byteArrayInfo);
+        if (PressureSensorId == PRESSURE_SENSOR_BMP280)
         {
             Buffer.BlockCopy(byteArrayInfo, 222, pressureCalRawParams, 22, 2);
+            CalculateBMP280PressureCalibrationCoefficientsResponse(pressureCalRawParams);
         }
-
-        if (HardwareVersion == (int)ShimmerVersion.SHIMMER3R)
+        else if (PressureSensorId == PRESSURE_SENSOR_BMP180)
         {
-            //The SD header carries no pressure sensor ID and, for a BMP581, the calibration region is not written
-            //(log-and-stream-common SDCard/shimmer_sd_header.c), so use the SR number rule from the header's HW/FW/expansion board fields
-            if (isShimmer3RwithBmp581())
-            {
-                PressureSensorId = PRESSURE_SENSOR_BMP581;
-            }
-            else
-            {
-                PressureSensorId = PRESSURE_SENSOR_BMP390;
-                CalculateBMP390PressureCalibrationCoefficientsResponse(pressureCalRawParams);
-            }
+            CalculateBMP180PressureCalibrationCoefficientsResponse(pressureCalRawParams);
         }
-        else
+        else if (PressureSensorId == PRESSURE_SENSOR_BMP390)
         {
-            if (isShimmer3withUpdatedSensors())
-            {
-                CalculateBMP280PressureCalibrationCoefficientsResponse(pressureCalRawParams);
-            }
-            else
-            {
-                CalculateBMP180PressureCalibrationCoefficientsResponse(pressureCalRawParams);
-            }
+            CalculateBMP390PressureCalibrationCoefficientsResponse(pressureCalRawParams);
         }
+        //BMP581: the sensor outputs compensated data and the calibration region is not written (log-and-stream-common SDCard/shimmer_sd_header.c).
+        //No sensor fitted, or a sensor this API does not recognise: no calibration applies and the channels are output uncalibrated.
 
         if (HardwareVersion == (int)ShimmerVersion.SHIMMER3R)
         {   
@@ -549,8 +553,74 @@ public void ProcessSDLogHeader(byte[] byteArrayInfo)
             InterpretDataPacketFormat();
         }
 
-        
+        if (PressureSensorId == PRESSURE_SENSOR_NONE && (EnabledSensors & (int)SensorBitmapShimmer3.SENSOR_BMP180_PRESSURE) > 0)
+        {
+            AddPressureSensorWarning("The SD header records no pressure sensor fitted, but pressure is enabled: pressure and temperature are output uncalibrated");
+        }
+
     }
+
+        /// <summary>
+        /// Sets PressureSensorId from the SD header's pressure sensor ID (SDH_PRESSURE_SENSOR_ID, DEV-1123) when the firmware records it, and
+        /// otherwise from the board rules as before (GetPressureSensorFromBoardRules()). A recorded ID overrides the board rules. An ID this API
+        /// does not recognise is kept as is, never replaced by the board rules, so that no BMP180/280/390/581 calibration is applied to it.
+        /// </summary>
+        private void SetPressureSensorIdFromSdHeader(byte[] byteArrayInfo)
+        {
+            int boardRuleSensorId = GetPressureSensorFromBoardRules();
+            int sdHeaderValue = byteArrayInfo[SDH_PRESSURE_SENSOR_ID];
+            PressureSensorInferred = false;
+            mPressureSensorWarnings.Clear();
+
+            if (!isSdHeaderPressureSensorIdRecorded() || sdHeaderValue == SDH_PRESSURE_SENSOR_NOT_RECORDED)
+            {
+                PressureSensorId = boardRuleSensorId;
+                return;
+            }
+            if (sdHeaderValue == PRESSURE_SENSOR_NONE)
+            {
+                PressureSensorId = PRESSURE_SENSOR_NONE;
+                return;
+            }
+
+            PressureSensorId = sdHeaderValue & ~SDH_PRESSURE_SENSOR_INFERRED;
+            PressureSensorInferred = (sdHeaderValue & SDH_PRESSURE_SENSOR_INFERRED) != 0;
+            if (PressureSensorInferred)
+            {
+                AddPressureSensorWarning("The pressure sensor (ID " + PressureSensorId + ") was inferred from the SR number by the firmware, not confirmed by chip ID");
+            }
+            if (PressureSensorId > PRESSURE_SENSOR_BMP581)
+            {
+                AddPressureSensorWarning("Unrecognised pressure sensor ID " + PressureSensorId + " in the SD header: pressure and temperature are output uncalibrated");
+            }
+            else if (PressureSensorId != boardRuleSensorId)
+            {
+                Debug.WriteLine("SD header pressure sensor ID " + PressureSensorId + " overrides " + boardRuleSensorId + " from the board rules");
+            }
+        }
+
+        /// <summary>
+        /// True if the firmware that wrote this file records the pressure sensor ID in the SD header: LogAndStream v1.01.018 on a Shimmer3R
+        /// and v1.01.006 on a Shimmer3. The two version lines overlap, so the hardware version is checked as well.
+        /// </summary>
+        private bool isSdHeaderPressureSensorIdRecorded()
+        {
+            if (HardwareVersion == (int)ShimmerVersion.SHIMMER3R)
+            {
+                return compareVersions(FW_IDENTIFIER_LOGANDSTREAM, 1, 1, 18);
+            }
+            if (HardwareVersion == (int)ShimmerVersion.SHIMMER3)
+            {
+                return compareVersions(FW_IDENTIFIER_LOGANDSTREAM, 1, 1, 6);
+            }
+            return false;
+        }
+
+        private void AddPressureSensorWarning(string warning)
+        {
+            Debug.WriteLine(warning);
+            mPressureSensorWarnings.Add(warning);
+        }
 
         public ObjectCluster ReadPacketMsg()
         {
