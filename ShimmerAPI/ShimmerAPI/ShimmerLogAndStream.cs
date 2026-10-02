@@ -90,7 +90,7 @@ namespace ShimmerAPI
         /// <param name="exg1configuration">10 byte value, see SHIMMER3_DEFAULT_ECG_REG1/SHIMMER3_DEFAULT_EMG_REG1/SHIMMER3_DEFAULT_TEST_REG1</param>
         /// <param name="exg2configuration">10 byte value, see SHIMMER3_DEFAULT_ECG_REG2/SHIMMER3_DEFAULT_EMG_REG2/SHIMMER3_DEFAULT_TEST_REG2</param>
         /// <param name="internalExpPower"></param>
-        /// <param name="CRCmode"></param>Whether to enable CRC model, note on log and stream 0.13.7 > supports this, otherwise command does nothing
+        /// <param name="CRCmode">Whether to enable CRC mode, note on log and stream 0.13.7 > supports this, otherwise command does nothing. Not turned on for Shimmer3R LogAndStream before 1.0.11, which turns it off by itself whenever sensing stops: the device connects without it and a MSG_WARNING notification says why</param>
         public ShimmerLogAndStream(String devName, double samplingRate, int accelRange, int gsrRange, int setEnabledSensors, bool enableLowPowerAccel, bool enableLowPowerGyro, bool enableLowPowerMag, int gyroRange, int magRange, byte[] exg1configuration, byte[] exg2configuration, bool internalexppower, BTCRCMode CRCmode)
             : base(devName, samplingRate, accelRange, gsrRange, setEnabledSensors, enableLowPowerAccel, enableLowPowerGyro, enableLowPowerMag, gyroRange, magRange, exg1configuration, exg2configuration, internalexppower)
         {
@@ -547,6 +547,26 @@ namespace ShimmerAPI
         }
 
 
+        /// <summary>
+        /// Applies the CRC mode given to the constructor, while connecting. A CRC asked of Shimmer3R
+        /// LogAndStream before 1.0.11, which turns it off by itself whenever sensing stops, is not sent:
+        /// the device connects without one and a MSG_WARNING notification says why (DEV-976). On
+        /// firmware without SET_CRC_COMMAND nothing is sent, as before.
+        /// </summary>
+        protected void WriteCRCModeToSetup()
+        {
+            if (IsCRCSupported())
+            {
+                WriteCRCMode(CRCModeToSetup);
+            }
+            else if (CRCModeToSetup != BTCRCMode.OFF && !KeepsCRCWhenSensingStops())
+            {
+                String message = "The Bluetooth CRC was not turned on: " + GetCRCRefusalReason();
+                CustomEventArgs newEventArgs = new CustomEventArgs((int)ShimmerIdentifier.MSG_IDENTIFIER_NOTIFICATION_MESSAGE, (object)message, (int)ShimmerSDBTMinorIdentifier.MSG_WARNING);
+                OnNewEvent(newEventArgs);
+            }
+        }
+
         protected override void InitializeShimmer3SDBT()
         {
             RadioVersion = "";
@@ -556,10 +576,7 @@ namespace ShimmerAPI
             }
             if (SetupDevice == true)
             {
-                if (IsCRCSupported())
-                {
-                    WriteCRCMode(CRCModeToSetup);
-                }
+                WriteCRCModeToSetup();
                 WriteAccelRange(AccelRange);
                 WriteGSRRange(GSRRange);
                 WriteGyroRange(GyroRange);
