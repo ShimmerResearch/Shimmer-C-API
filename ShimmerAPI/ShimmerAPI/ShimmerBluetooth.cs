@@ -5797,7 +5797,9 @@ namespace ShimmerAPI
             }
         }
         /// <summary>
-        /// 
+        /// Whether this API will turn the Bluetooth CRC on for the connected firmware. False on firmware
+        /// without SET_CRC_COMMAND, and on Shimmer3R LogAndStream before 1.0.11, which turns the CRC off
+        /// by itself whenever sensing stops (see KeepsCRCWhenSensingStops).
         /// </summary>
         /// <returns></returns>
         /// <exception cref="Exception">If device is not connected/streaming</exception>
@@ -5807,7 +5809,7 @@ namespace ShimmerAPI
                 GetState() == SHIMMER_STATE_STREAMING ||
                 GetState() == SHIMMER_STATE_CONNECTING)
             {
-                if (GetCompatibilityCode() >= 8)
+                if (GetCompatibilityCode() >= 8 && KeepsCRCWhenSensingStops())
                 {
                     return true;
                 }
@@ -5817,6 +5819,50 @@ namespace ShimmerAPI
                 throw new Exception("Device needs to be connected, connecting or streaming");
             }
             return false;
+        }
+
+        /// <summary>
+        /// False when the firmware turns the Bluetooth CRC off by itself whenever sensing stops, as the
+        /// Shimmer3R LogAndStream releases of November and December 2024, 0.0.2 to 1.0.10, do (DEV-976).
+        /// <para>
+        /// S4Sens_stopSensing clears it (shimmer3r-firmware S3R_Production/S4_App/s4_sensing.c:354 at
+        /// LogAndStream_Shimmer3R_v1.00.010), and so does S4Sens_checkStartStreamingConditions when a
+        /// stream stops while logging carries on. Between them they cover STOP_STREAMING, STOP_SDBT and
+        /// STOP_LOGGING, and the user button or docking ending SD logging, and nothing tells the host.
+        /// The stop's own ACK still carries the CRC, but every reply after it arrives without one, so
+        /// this API would go on taking CRC bytes out of replies and streams that no longer have them.
+        /// shimmer3r-firmware c8016de3 removed the clears, and LogAndStream 1.0.11 is the first release
+        /// that keeps the CRC.
+        /// </para>
+        /// <para>
+        /// Shimmer3 and Shimmer3R LogAndStream version numbers overlap, so the hardware version decides,
+        /// and no Shimmer3 firmware clears the CRC at a stop. The hardware is taken as the device reports
+        /// it, which lets one build through: LogAndStream_Shimmer3R_v1.00.008, a side build for older
+        /// Consensys, reports a Shimmer3 and cannot be told from a Shimmer3 on LogAndStream 1.0.8. The
+        /// web SDK refuses the same releases (shimmer-web-sdk keepsLinkCrcWhenSensingStops).
+        /// </para>
+        /// </summary>
+        public bool KeepsCRCWhenSensingStops()
+        {
+            if (HardwareVersion == (int)ShimmerVersion.SHIMMER3R)
+            {
+                if (FirmwareIdentifier == ShimmerBluetooth.FW_IDENTIFIER_LOGANDSTREAM)   //LogAndStream
+                {
+                    return compareVersions(1, 0, 11);
+                }
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// Why a CRC is refused on firmware that turns it off whenever sensing stops, for the exception
+        /// WriteCRCMode throws and the warning a constructor's CRC mode gets.
+        /// </summary>
+        protected String GetCRCRefusalReason()
+        {
+            return "Shimmer3R " + FirmwareVersionFullName + " turns it off by itself whenever streaming or logging stops, "
+                + "without telling the host, so every reply after a stop would be misread. "
+                + "Update to LogAndStream 1.0.11 or later to use a CRC.";
         }
 
         /// <summary>
@@ -6287,13 +6333,25 @@ namespace ShimmerAPI
             return BluetoothCRCMode;
         }
 
+        /// <summary>
+        /// Turns the Bluetooth CRC on or off. Turning it on is refused, and nothing is sent, wherever
+        /// IsCRCSupported is false. Turning it off is never refused on firmware that has the command,
+        /// including Shimmer3R LogAndStream before 1.0.11.
+        /// </summary>
+        /// <exception cref="Exception">If the device is not connected, the firmware has no SET_CRC_COMMAND,
+        /// or a CRC is asked of firmware that turns it off whenever sensing stops</exception>
         public void WriteCRCMode(BTCRCMode mode)
         {
-            if (IsCRCSupported())
+            // Off goes wherever the command exists: it can never leave this API expecting a CRC
+            if (IsCRCSupported() || (mode == BTCRCMode.OFF && GetCompatibilityCode() >= 8))
             {
                 WriteBytes(new byte[2] { (byte)InstructionsSet.SetCrcCommand, ((byte)mode) }, 0, 2);
                 System.Threading.Thread.Sleep(300);
                 BluetoothCRCMode = mode;
+            }
+            else if (!KeepsCRCWhenSensingStops())
+            {
+                throw new Exception("Cannot turn the Bluetooth CRC on: " + GetCRCRefusalReason());
             }
             else
             {
