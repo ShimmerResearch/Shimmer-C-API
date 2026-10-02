@@ -5825,14 +5825,13 @@ namespace ShimmerAPI
         /// False when the firmware turns the Bluetooth CRC off by itself whenever sensing stops, as the
         /// Shimmer3R LogAndStream releases of November and December 2024, 0.0.2 to 1.0.10, do (DEV-976).
         /// <para>
-        /// S4Sens_stopSensing clears it (shimmer3r-firmware S3R_Production/S4_App/s4_sensing.c:354 at
-        /// LogAndStream_Shimmer3R_v1.00.010), and so does S4Sens_checkStartStreamingConditions when a
-        /// stream stops while logging carries on. Between them they cover STOP_STREAMING, STOP_SDBT and
-        /// STOP_LOGGING, and the user button or docking ending SD logging, and nothing tells the host.
-        /// The stop's own ACK still carries the CRC, but every reply after it arrives without one, so
-        /// this API would go on taking CRC bytes out of replies and streams that no longer have them.
-        /// shimmer3r-firmware c8016de3 removed the clears, and LogAndStream 1.0.11 is the first release
-        /// that keeps the CRC.
+        /// S4Sens_stopSensing clears it once every active mode has been told to stop (shimmer3r-firmware
+        /// S3R_Production/S4_App/s4_sensing.c:354 at LogAndStream_Shimmer3R_v1.00.010): on STOP_SDBT, on
+        /// STOP_STREAMING while only streaming, and on STOP_LOGGING, the user button or docking while
+        /// only logging. Nothing tells the host. The stop's own ACK still carries the CRC, but every
+        /// reply after it arrives without one, so this API would go on taking CRC bytes out of replies
+        /// and streams that no longer have them. shimmer3r-firmware c8016de3 removed the clears, and
+        /// LogAndStream 1.0.11 is the first release that keeps the CRC.
         /// </para>
         /// <para>
         /// Shimmer3 and Shimmer3R LogAndStream version numbers overlap, so the hardware version decides,
