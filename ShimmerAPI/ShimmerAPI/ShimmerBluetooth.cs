@@ -3937,11 +3937,11 @@ namespace ShimmerAPI
                     if (HardwareVersion == (int)ShimmerBluetooth.ShimmerVersion.SHIMMER3R)
                     {
                         //datatemp = CalibrateShimmer3RAdcChannel(datatemp) * 1.988;
-                        datatemp = (CalibrateU12AdcValue(datatemp, 0, 3, 1) * 1.988);
+                        datatemp = (CalibrateU12AdcValue(datatemp, 0, 3, 1) * 2.0); //switch to 2.0 to match the theoretical value
                     }
                     else
                     {
-                        datatemp = (CalibrateU12AdcValue(datatemp, 0, 3, 1) * 1.988);
+                        datatemp = (CalibrateU12AdcValue(datatemp, 0, 3, 1) * 2.0); //switch to 2.0 to match the theoretical value
                     }
 
                     if (datatemp < 3400 && datatemp > 3000)
