@@ -208,7 +208,7 @@ namespace ShimmerBluetoothTests
             }
         }
 
-        static void AssertReadsSamplingRate(CrcLinkDevice device, int ticks, string when)
+        internal static void AssertReadsSamplingRate(CrcLinkDevice device, int ticks, string when)
         {
             double expected = (double)32768 / ticks;
             Assert.AreNotEqual(expected, device.GetSamplingRate(), "Pick a rate the API does not already have");

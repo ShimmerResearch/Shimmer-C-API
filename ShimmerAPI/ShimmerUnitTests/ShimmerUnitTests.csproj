@@ -58,6 +58,7 @@
   <ItemGroup>
     <Compile Include="ShimmerLogAndStreamS3RSimulatorTest.cs" />
     <Compile Include="ShimmerLogAndStreamS3SimulatorTest.cs" />
+    <Compile Include="ShimmerBareAckCrcTest.cs" />
     <Compile Include="ShimmerBluetoothReadData.cs" />
     <Compile Include="ShimmerCrcFirmwareTest.cs" />
     <Compile Include="ShimmerCrcSwitchTest.cs" />
