@@ -98,6 +98,13 @@ namespace ShimmerAPI
         protected int ShimmerState = SHIMMER_STATE_NONE;
 
         protected bool mWaitingForStartStreamingACK = false;
+        /// <summary>
+        /// Set while WriteCRCMode waits for the ACK to SET_CRC_COMMAND. The firmware switches its CRC
+        /// before it builds that ACK, so the ACK is framed in the new mode, mCRCModeAfterACK, and
+        /// ReadData switches to it there.
+        /// </summary>
+        protected volatile bool mWaitingForCRCModeACK = false;
+        protected BTCRCMode mCRCModeAfterACK = BTCRCMode.OFF;
         private int StreamTimeOutCount = 0;
         protected bool StreamingACKReceived = false;
         protected String DeviceName;
@@ -1557,7 +1564,19 @@ namespace ShimmerAPI
                                 break;
                             case (byte)PacketTypeShimmer2.ACK_COMMAND:
                                 System.Console.WriteLine("ACK Received");
-                                if (mWaitingForStartStreamingACK)
+                                if (mWaitingForCRCModeACK)
+                                {
+                                    // The ACK to SET_CRC_COMMAND carries the new mode's CRC, so switch
+                                    // before dropping it. Read in the old mode, the CRC of a bare ACK
+                                    // (F4 65) was left behind, and 0x65 is DETECT_EXPANSION_BOARD_RESPONSE.
+                                    BluetoothCRCMode = mCRCModeAfterACK;
+                                    mWaitingForCRCModeACK = false;
+                                    for (int k = 0; k < (int)BluetoothCRCMode; k++)
+                                    {
+                                        ReadByte();
+                                    }
+                                }
+                                else if (mWaitingForStartStreamingACK)
                                 {
                                     SetState(SHIMMER_STATE_STREAMING);
                                     mWaitingForStartStreamingACK = false;
@@ -6336,6 +6355,10 @@ namespace ShimmerAPI
         /// Turns the Bluetooth CRC on or off. Turning it on is refused, and nothing is sent, wherever
         /// IsCRCSupported is false. Turning it off is never refused on firmware that has the command,
         /// including Shimmer3R LogAndStream before 1.0.11.
+        /// <para>
+        /// The firmware switches its CRC before it ACKs the command, so the read thread switches at
+        /// that ACK. If no ACK arrives within the 300 ms wait, the mode is applied at the end of it.
+        /// </para>
         /// </summary>
         /// <exception cref="Exception">If the device is not connected, the firmware has no SET_CRC_COMMAND,
         /// or a CRC is asked of firmware that turns it off whenever sensing stops</exception>
@@ -6344,8 +6367,18 @@ namespace ShimmerAPI
             // Off goes wherever the command exists: it can never leave this API expecting a CRC
             if (IsCRCSupported() || (mode == BTCRCMode.OFF && GetCompatibilityCode() >= 8))
             {
-                WriteBytes(new byte[2] { (byte)InstructionsSet.SetCrcCommand, ((byte)mode) }, 0, 2);
-                System.Threading.Thread.Sleep(300);
+                mCRCModeAfterACK = mode;
+                mWaitingForCRCModeACK = true;
+                try
+                {
+                    WriteBytes(new byte[2] { (byte)InstructionsSet.SetCrcCommand, ((byte)mode) }, 0, 2);
+                    System.Threading.Thread.Sleep(300);
+                }
+                finally
+                {
+                    // Left set, it would take the next reply's ACK for this one
+                    mWaitingForCRCModeACK = false;
+                }
                 BluetoothCRCMode = mode;
             }
             else if (!KeepsCRCWhenSensingStops())
