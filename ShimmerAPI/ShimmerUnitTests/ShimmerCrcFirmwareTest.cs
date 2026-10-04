@@ -142,13 +142,13 @@ namespace ShimmerBluetoothTests
             Assert.AreEqual(expected, device.IsCRCSupported(), "HW " + hardwareVersion + " LogAndStream " + major + "." + minor + "." + fwInternal);
         }
 
-        static void AssertSentOnly(CrcFirmwareDevice device, ShimmerBluetooth.BTCRCMode mode)
+        internal static void AssertSentOnly(CrcFirmwareDevice device, ShimmerBluetooth.BTCRCMode mode)
         {
             Assert.AreEqual(1, device.Written.Count);
             CollectionAssert.AreEqual(new byte[] { SetCrcCommand, (byte)mode }, device.Written[0]);
         }
 
-        static List<CustomEventArgs> CollectNotifications(CrcFirmwareDevice device)
+        internal static List<CustomEventArgs> CollectNotifications(CrcFirmwareDevice device)
         {
             var notifications = new List<CustomEventArgs>();
             device.UICallback += (sender, args) =>
@@ -162,7 +162,7 @@ namespace ShimmerBluetoothTests
             return notifications;
         }
 
-        static Exception Throws(Action action)
+        internal static Exception Throws(Action action)
         {
             try
             {
