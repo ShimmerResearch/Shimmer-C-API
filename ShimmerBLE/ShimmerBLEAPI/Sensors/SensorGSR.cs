@@ -22,7 +22,16 @@ namespace shimmer.Sensors
         protected SensorSetting GSROversamplingRateSetting = Sensor.UnknownSetting;
         public const double LIMIT_FOR_MINIMUM_VALID_GSR_CONDUCTANCE_US = 0.03;
         public const int GSR_UNCAL_LIMIT_RANGE3_SR62 = 683;
-        public const int GSR_UNCAL_LIMIT_RANGE3_SR68 = 1134;
+        /// <summary>
+        /// Codes below this, on any range, decode as range 3 at it so that an open circuit reads as
+        /// open (range 3 only until DEV-1070), which only works if the limit is above the amplifier
+        /// reference. 1138 is the first code above 0.5 V at the SR68's 1.8 V full scale (0.5 V =
+        /// code 1137.5), so it also clears the 0.4986 V that CalibrateGsrDataToKOhmsUsingAmplifierEq
+        /// divides by (code 1134.3); the Java driver divides by 0.5 V, and 1138 is correct under
+        /// both. It was 1134, the last code below 0.4986 V: that decoded to a negative resistance,
+        /// nudged to 8 kOhm, so an open circuit read 125 uS and counted as Connected (DEV-1067).
+        /// </summary>
+        public const int GSR_UNCAL_LIMIT_RANGE3_SR68 = 1138;
 
         /// <summary>
         /// GSR range setting
@@ -239,22 +248,15 @@ namespace shimmer.Sensors
                 {
                     currentGSRRange = (gsrraw >> 14) & 0x03;
                 }
-                if (currentGSRRange == 3)
+                // A code below the range-3 limit puts the amplifier output at or under its reference,
+                // which no skin resistance can do, so the electrodes are open. Range 3 has long raised
+                // such a code to the limit. Ranges 0-2 see them too, in the auto-range transient as the
+                // electrodes come off, and now decode them the same way, as range 3 at the limit (DEV-1070).
+                var gsrUncalLimitRange3 = GetGsrUncalLimitRange3();
+                if (gsrAdcValueUnCal < gsrUncalLimitRange3)
                 {
-                    if (HasSecondGenerationGsrFrontEnd())
-                    {
-                        if (gsrAdcValueUnCal < GSR_UNCAL_LIMIT_RANGE3_SR68)
-                        {
-                            gsrAdcValueUnCal = GSR_UNCAL_LIMIT_RANGE3_SR68;
-                        }
-                    }
-                    else
-                    {
-                        if (gsrAdcValueUnCal < GSR_UNCAL_LIMIT_RANGE3_SR62)
-                        {
-                            gsrAdcValueUnCal = GSR_UNCAL_LIMIT_RANGE3_SR62;
-                        }
-                    } 
+                    gsrAdcValueUnCal = (short)gsrUncalLimitRange3;
+                    currentGSRRange = 3;
                 }
                 var calVolts = VerisenseDevice.CalibrateADCValueToVolts(gsrAdcValueUnCal,DeviceHardwareIdentifier);
                 var gsrResistanceKOhms = CalibrateGsrDataToKOhmsUsingAmplifierEq(calVolts, currentGSRRange);
@@ -401,6 +403,16 @@ namespace shimmer.Sensors
         private bool HasSecondGenerationGsrFrontEnd()
         {
             return !DeviceHardwareIdentifier.Equals(HardwareIdentifier.VERISENSE_GSR_PLUS);
+        }
+        /// <summary>
+        /// The range-3 open-circuit limit for this device's front end: the first code above its
+        /// amplifier reference, below which a sample on any range is an open circuit (DEV-1067,
+        /// DEV-1070). It follows the same front-end choice as the feedback resistors and reference
+        /// (HasSecondGenerationGsrFrontEnd), so an SR61-5/6 gets the SR68's limit (DEV-1069).
+        /// </summary>
+        private int GetGsrUncalLimitRange3()
+        {
+            return HasSecondGenerationGsrFrontEnd() ? GSR_UNCAL_LIMIT_RANGE3_SR68 : GSR_UNCAL_LIMIT_RANGE3_SR62;
         }
         /// <summary>
         /// Calibrate GSR Data to KOhms using the amplifier equation. The output may differs with different hardware
