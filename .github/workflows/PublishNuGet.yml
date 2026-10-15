@@ -1,16 +1,25 @@
 name: PublishNuGet
 
-# Publishes ShimmerAPI and Shimmer32FeetAPI to nuget.org when a GitHub release is published.
-# Bump <Version> in both csproj files first; the release tag (vX.Y.Z) must match it.
+# Releases ShimmerAPI and Shimmer32FeetAPI: Actions > PublishNuGet > Run workflow, on master.
+# The version is the latest vX.Y.Z tag with the chosen part bumped. It is stamped into both
+# projects at build time, so the <Version> in the csproj files and Shimmer32FeetAPI's
+# AssemblyInfo.cs is only the default for local builds and is never bumped by hand.
+# The run pushes both packages to nuget.org, then creates the tag and a GitHub release with
+# generated notes. A release made by hand on GitHub publishes nothing.
 # Uses nuget.org trusted publishing: no stored API key. The ShimmerEngineering profile on
 # nuget.org holds a policy trusting this repo and this workflow file, so renaming the file
 # means updating that policy.
-# Pull requests that touch either package only build and pack, so the step that pushes is the
-# only one a release adds.
+# Pull requests that touch either package build and pack at the next patch version, and
+# publish nothing.
 
 on:
-  release:
-    types: [ published ]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Part of the latest vX.Y.Z tag to bump'
+        type: choice
+        options: [ patch, minor, major ]
+        default: patch
   pull_request:
     branches: [ master ]
     paths:
@@ -20,8 +29,11 @@ on:
       - '.github/workflows/PublishNuGet.yml'
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
 
 jobs:
   publish:
@@ -32,47 +44,82 @@ jobs:
       PACKAGE_DIR: ${{ github.workspace }}\nupkg-out
 
     steps:
+    - name: Check the release is from master
+      if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/master'
+      run: |
+        Write-Error "Releases are made from master. Run the workflow again with 'Use workflow from: master', not $env:GITHUB_REF_NAME."
+        exit 1
     - uses: actions/checkout@v4
+    - name: Work out the version
+      env:
+        BUMP: ${{ inputs.bump || 'patch' }}
+      run: |
+        # Only vX.Y.Z tags: the repo also has BLE and REV tags in other formats.
+        $versions = git ls-remote --tags --refs origin 'refs/tags/v*' |
+          ForEach-Object { ($_ -split 'refs/tags/')[1] } |
+          Where-Object { $_ -match '^v\d+\.\d+\.\d+$' } |
+          ForEach-Object { [version]$_.Substring(1) }
+        if (-not $versions) {
+          Write-Error 'No vX.Y.Z tag to bump from.'
+          exit 1
+        }
+        $previous = $versions | Sort-Object | Select-Object -Last 1
+        $version = switch ($env:BUMP) {
+          'major' { "$($previous.Major + 1).0.0" }
+          'minor' { "$($previous.Major).$($previous.Minor + 1).0" }
+          default { "$($previous.Major).$($previous.Minor).$($previous.Build + 1)" }
+        }
+        "Previous release v$previous, this one v$version"
+        "VERSION=$version" >> $env:GITHUB_ENV
+        "PREVIOUS_TAG=v$previous" >> $env:GITHUB_ENV
+    - name: Stamp the version into Shimmer32FeetAPI's AssemblyInfo
+      run: |
+        # A non-SDK project: -p:Version sets its package version but not its assembly version.
+        $file = 'Shimmer32FeetAPI/Properties/AssemblyInfo.cs'
+        $text = Get-Content $file -Raw
+        foreach ($attribute in 'AssemblyVersion', 'AssemblyFileVersion') {
+          $pattern = "(?m)^\[assembly: $attribute\(""[^""]*""\)\]"
+          if ($text -notmatch $pattern) {
+            Write-Error "No [assembly: $attribute(...)] line in $file to stamp."
+            exit 1
+          }
+          $text = $text -replace $pattern, "[assembly: $attribute(""$env:VERSION.0"")]"
+        }
+        Set-Content $file $text -NoNewline -Encoding utf8BOM
     - name: Setup MSBuild Path
       uses: microsoft/setup-msbuild@v2
     - name: Build and pack ShimmerAPI
-      run: msbuild ShimmerAPI/ShimmerAPI/ShimmerAPI.csproj -restore -p:Configuration=Release "-p:PackageOutputPath=$env:PACKAGE_DIR"
+      run: msbuild ShimmerAPI/ShimmerAPI/ShimmerAPI.csproj -restore -p:Configuration=Release "-p:Version=$env:VERSION" "-p:PackageOutputPath=$env:PACKAGE_DIR"
     - name: Build and pack Shimmer32FeetAPI
-      run: msbuild Shimmer32FeetAPI/Shimmer32FeetAPI.csproj -restore -p:Configuration=Release "-p:PackageOutputPath=$env:PACKAGE_DIR"
-    - name: Check packages match the release tag
-      if: github.event_name == 'release'
-      env:
-        TAG: ${{ github.event.release.tag_name }}
-      run: |
-        $version = $env:TAG -replace '^v', ''
-        foreach ($id in 'ShimmerAPI', 'Shimmer32FeetAPI') {
-          if (-not (Test-Path "$env:PACKAGE_DIR\$id.$version.nupkg")) {
-            $packed = (Get-ChildItem $env:PACKAGE_DIR -Filter *.nupkg).Name -join ', '
-            Write-Error "No $id.$version.nupkg - release tag $env:TAG does not match <Version> in $id's csproj. Packed: $packed"
-            exit 1
-          }
-        }
+      run: msbuild Shimmer32FeetAPI/Shimmer32FeetAPI.csproj -restore -p:Configuration=Release "-p:Version=$env:VERSION" "-p:PackageOutputPath=$env:PACKAGE_DIR"
     - name: Upload packages
       uses: actions/upload-artifact@v4
       with:
         name: nuget-packages
         path: ${{ env.PACKAGE_DIR }}
     - name: NuGet login
-      if: github.event_name == 'release'
+      if: github.event_name == 'workflow_dispatch'
       id: login
       uses: NuGet/login@v1
       with:
         user: ShimmerEngineering
     - name: Push to nuget.org
-      if: github.event_name == 'release'
+      if: github.event_name == 'workflow_dispatch'
       env:
-        TAG: ${{ github.event.release.tag_name }}
         NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
       run: |
-        $version = $env:TAG -replace '^v', ''
         # ShimmerAPI first: Shimmer32FeetAPI depends on this exact version of it.
         # --skip-duplicate makes a re-run safe after a partial failure.
         foreach ($id in 'ShimmerAPI', 'Shimmer32FeetAPI') {
-          dotnet nuget push "$env:PACKAGE_DIR\$id.$version.nupkg" --api-key $env:NUGET_API_KEY --source https://api.nuget.org/v3/index.json --skip-duplicate
+          dotnet nuget push "$env:PACKAGE_DIR\$id.$env:VERSION.nupkg" --api-key $env:NUGET_API_KEY --source https://api.nuget.org/v3/index.json --skip-duplicate
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         }
+    - name: Create the tag and GitHub release
+      if: github.event_name == 'workflow_dispatch'
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        # Last, so a failed push leaves no tag behind and a re-run picks the same version.
+        $notes = "NuGet: https://www.nuget.org/packages/ShimmerAPI/$env:VERSION and https://www.nuget.org/packages/Shimmer32FeetAPI/$env:VERSION"
+        gh release create "v$env:VERSION" --target $env:GITHUB_SHA --title "Shimmer C# API Rev $env:VERSION" --notes $notes --generate-notes --notes-start-tag $env:PREVIOUS_TAG
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

@@ -30,22 +30,28 @@ tests, `ShimmerCaptureXamarin` — is **never built by CI**.
 
 ## Releases publish to NuGet from CI
 
-`PublishNuGet.yml` runs when a GitHub release is published. It builds `ShimmerAPI` and
-`Shimmer32FeetAPI` in Release and pushes both to nuget.org (profile `ShimmerEngineering`) through
-**trusted publishing** — there is no API key to store or renew. Instead, a policy on that nuget.org
-profile trusts `ShimmerResearch/Shimmer-C-API` and the workflow file name `PublishNuGet.yml`, and each
-run exchanges GitHub's OIDC token for a one-hour key. Renaming the workflow file or moving the repo
-breaks publishing until the policy is updated to match. To release:
+To release, open **Actions → PublishNuGet → Run workflow** on `master` and pick the part to bump —
+`patch` by default. That is the whole process: no version edits, no uprev PR, no hand-made release.
 
-1. Bump `<Version>` in `ShimmerAPI/ShimmerAPI/ShimmerAPI.csproj` and
-   `Shimmer32FeetAPI/Shimmer32FeetAPI.csproj`, and `AssemblyVersion`/`AssemblyFileVersion` in
-   `Shimmer32FeetAPI/Properties/AssemblyInfo.cs` — the workflow checks only the csproj versions.
-2. Merge, then publish a release tagged `v` + that version, e.g. `v1.3.12`.
+The run takes the latest `vX.Y.Z` tag (other tag formats in this repo, such as `BLEv…` and `REV0_…`,
+are ignored), bumps it, and stamps that version into the build: `-p:Version` for both projects, plus a
+rewrite of the two version attributes in `Shimmer32FeetAPI/Properties/AssemblyInfo.cs` inside the CI
+checkout. **The `<Version>` in the csproj files and the version in that `AssemblyInfo.cs` are only the
+defaults for local builds** — they are not the released version, and nobody bumps them.
 
-A tag that does not match both csproj versions fails the run before anything is pushed. ShimmerAPI is
-pushed first because the Shimmer32FeetAPI package depends on that exact ShimmerAPI version.
-`--skip-duplicate` makes a re-run safe. PRs that touch either package run the same workflow pack-only
-and attach the `.nupkg` files as an artifact.
+It then pushes both packages to nuget.org (profile `ShimmerEngineering`) — ShimmerAPI first, because
+the Shimmer32FeetAPI package depends on that exact ShimmerAPI version — and only then creates the
+`vX.Y.Z` tag and a GitHub release with generated notes. If the push fails, no tag exists, so a re-run
+picks the same version; `--skip-duplicate` makes the re-run safe. A release created by hand on GitHub
+publishes nothing.
+
+Publishing uses **trusted publishing**, so there is no API key to store or renew. Instead, a policy on
+that nuget.org profile trusts `ShimmerResearch/Shimmer-C-API` and the workflow file name
+`PublishNuGet.yml`, and each run exchanges GitHub's OIDC token for a one-hour key. Renaming the
+workflow file or moving the repo breaks publishing until the policy is updated to match.
+
+PRs that touch either package run the same workflow at the next patch version without publishing, and
+attach the `.nupkg` files as an artifact.
 
 ## The same logic exists three times in this repo
 
