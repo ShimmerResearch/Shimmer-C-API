@@ -24,6 +24,18 @@ namespace ShimmerBLETests.Communications
         int DataSyncMtuSize = 5;
         public Guid Asm_uuid { get; set; }
 
+        /// <summary>
+        /// The reply to a production config read: header, 2-byte length, then the config. The
+        /// default reports firmware 1.2.87.
+        /// </summary>
+        public byte[] ProdConfigResponse { get; set; } = new byte[] { 51, 13, 0, 90, 215, 74, 1, 2, 4, 25, 1, 0, 1, 2, 87, 0 };
+
+        /// <summary>How many production config reads were asked for</summary>
+        public int ProdConfigReads { get; private set; }
+
+        /// <summary>The last write operational config request, header and all, or null</summary>
+        public byte[] LastOpConfigWriteRequest { get; private set; }
+
         public event EventHandler<ByteLevelCommunicationEvent> CommunicationEvent;
 
         public async Task<bool> Connect()
@@ -56,8 +68,8 @@ namespace ShimmerBLETests.Communications
                 }
                 else if (bytes[0] == ReadProdConfigRequest[0])
                 {
-                    // "51, 13, 0, 90, 215, 74, 1, 2, 4, 25, 1, 0, 1, 2, 87, 0"
-                    byte[] result = new byte[] { 51, 13, 0, 90, 215, 74, 1, 2, 4, 25, 1, 0, 1, 2, 87, 0 };
+                    ProdConfigReads++;
+                    byte[] result = ProdConfigResponse;
                     if (CommunicationEvent != null)
                     {
                         CommunicationEvent.Invoke(null, new ByteLevelCommunicationEvent { Bytes = result, Event = ByteLevelCommunicationEvent.CommEvent.NewBytes });
@@ -193,6 +205,7 @@ namespace ShimmerBLETests.Communications
             }
             else if (bytes[0] == 36) //0x24 , write op config
             {
+                LastOpConfigWriteRequest = (byte[])bytes.Clone();
                 byte[] result = new byte[] { 68, 0, 0 }; //0x44 , write op config ack
                 if (CommunicationEvent != null)
                 {

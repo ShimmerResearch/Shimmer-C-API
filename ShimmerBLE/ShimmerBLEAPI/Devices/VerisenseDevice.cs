@@ -198,7 +198,9 @@ namespace ShimmerBLEAPI.Devices
         }
 
         /// <summary>
-        /// Disable/Enable bluetooth (bluetooth will always be enabled when USB powered)
+        /// Disable/Enable bluetooth. Firmware before V2.01.003 cannot run with it disabled, so an
+        /// operational config write keeps it enabled for that firmware: see
+        /// <see cref="EnforceBluetoothOffFirmwareGuard"/> (DEV-1096)
         /// </summary>
         /// <param name="enabled"></param>
         public void setBluetoothEnabled(bool enabled)
@@ -1074,6 +1076,57 @@ namespace ShimmerBLEAPI.Devices
                 throw new Exception("Production Config Unknown");
             }
             return false; // if less
+        }
+
+        /// <summary>
+        /// The first firmware on which BLUETOOTH_EN = 0 leaves USB working, V2.01.003 (DEV-1096).
+        /// Before it, ASM_Production handled USB only while its SoftDevice was on, and started the
+        /// SoftDevice only for Bluetooth. A sensor with Bluetooth off was then reachable over
+        /// neither: USB never enumerated, and a write that turned Bluetooth off over USB stopped
+        /// USB at once. Only SWD could recover it.
+        /// </summary>
+        public const int BluetoothOffMinFwMajor = 2;
+        public const int BluetoothOffMinFwMinor = 1;
+        public const int BluetoothOffMinFwInternal = 3;
+
+        const byte GenCfg0BluetoothEnabledMask = 0b00010000;
+
+        /// <summary>
+        /// Whether the sensor's firmware can run with Bluetooth disabled. False when its version is
+        /// unknown: no production config read, or a major version of 0xFF, the erased EEPROM value,
+        /// which no release has.
+        /// </summary>
+        /// <returns></returns>
+        public bool SupportsBluetoothOff()
+        {
+            if (ProdConfig == null || ProdConfig.REV_FW_MAJOR == 0xFF)
+            {
+                return false;
+            }
+            return MeetsMinimumFWRequirement(BluetoothOffMinFwMajor, BluetoothOffMinFwMinor, BluetoothOffMinFwInternal);
+        }
+
+        /// <summary>
+        /// Keep Bluetooth enabled in operational config bytes bound for this sensor if its firmware
+        /// cannot run without it (<see cref="SupportsBluetoothOff"/>). That includes firmware older
+        /// than V2.00.007, which ignores BLUETOOTH_EN: the bit still stays in the sensor's EEPROM,
+        /// and an update to V2.00.007 - V2.01.002 would then strand the sensor.
+        /// </summary>
+        /// <param name="opConfig">The operational config, from its 0x5A header; changed in place</param>
+        /// <returns>True if a correction was applied</returns>
+        public bool EnforceBluetoothOffFirmwareGuard(byte[] opConfig)
+        {
+            int index = (int)ConfigurationBytesIndexName.GEN_CFG_0;
+            if (opConfig == null || opConfig.Length <= index)
+            {
+                return false;
+            }
+            if ((opConfig[index] & GenCfg0BluetoothEnabledMask) != 0 || SupportsBluetoothOff())
+            {
+                return false;
+            }
+            opConfig[index] |= GenCfg0BluetoothEnabledMask;
+            return true;
         }
 
         /// <summary>
