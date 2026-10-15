@@ -39,19 +39,27 @@ rewrite of the two version attributes in `Shimmer32FeetAPI/Properties/AssemblyIn
 checkout. **The `<Version>` in the csproj files and the version in that `AssemblyInfo.cs` are only the
 defaults for local builds** — they are not the released version, and nobody bumps them.
 
-It then pushes both packages to nuget.org (profile `ShimmerEngineering`) — ShimmerAPI first, because
-the Shimmer32FeetAPI package depends on that exact ShimmerAPI version — and only then creates the
-`vX.Y.Z` tag and a GitHub release with generated notes. If the push fails, no tag exists, so a re-run
-picks the same version; `--skip-duplicate` makes the re-run safe. A release created by hand on GitHub
-publishes nothing.
+A separate `publish` job then pushes exactly the packages the `build` job made to nuget.org (profile
+`ShimmerEngineering`) — ShimmerAPI first, because the Shimmer32FeetAPI package depends on that exact
+ShimmerAPI version — and only then creates the `vX.Y.Z` tag and a GitHub release with generated notes.
+A release created by hand on GitHub publishes nothing.
+
+**If a release fails, recover with *Re-run failed jobs* on that same run — never a new Run
+workflow.** The re-run reuses that run's packages and commit, and `--skip-duplicate` skips whatever was
+already pushed. A new run would pick the same version (no tag exists yet) but build it from whatever
+`master` is now, so ShimmerAPI could stay the older build while Shimmer32FeetAPI and the tag come from
+the newer commit.
 
 Publishing uses **trusted publishing**, so there is no API key to store or renew. Instead, a policy on
-that nuget.org profile trusts `ShimmerResearch/Shimmer-C-API` and the workflow file name
-`PublishNuGet.yml`, and each run exchanges GitHub's OIDC token for a one-hour key. Renaming the
-workflow file or moving the repo breaks publishing until the policy is updated to match.
+that nuget.org profile trusts `ShimmerResearch/Shimmer-C-API`, the workflow file name
+`PublishNuGet.yml` and the GitHub environment `nuget-release`, and each run exchanges GitHub's OIDC
+token for a one-hour key. Only `master` may deploy to `nuget-release`, which is what stops a branch
+from publishing by editing its own copy of the workflow — the `if:` guards in the file cannot, because
+the branch can edit them too. Renaming the workflow file or the environment, or moving the repo, breaks
+publishing until the policy is updated to match.
 
-PRs that touch either package run the same workflow at the next patch version without publishing, and
-attach the `.nupkg` files as an artifact.
+PRs that touch either package run only the `build` job, at the next patch version and with read-only
+permissions, and attach the `.nupkg` files as an artifact.
 
 ## The same logic exists three times in this repo
 

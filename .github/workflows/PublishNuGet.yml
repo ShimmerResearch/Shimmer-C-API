@@ -4,13 +4,16 @@ name: PublishNuGet
 # The version is the latest vX.Y.Z tag with the chosen part bumped. It is stamped into both
 # projects at build time, so the <Version> in the csproj files and Shimmer32FeetAPI's
 # AssemblyInfo.cs is only the default for local builds and is never bumped by hand.
-# The run pushes both packages to nuget.org, then creates the tag and a GitHub release with
-# generated notes. A release made by hand on GitHub publishes nothing.
+# The build job packs both packages; the publish job pushes exactly those packages to nuget.org,
+# then creates the tag and a GitHub release with generated notes. A release made by hand on
+# GitHub publishes nothing. Recover a failed release with "Re-run failed jobs" on the same run,
+# never a new Run workflow (see AGENTS.md).
 # Uses nuget.org trusted publishing: no stored API key. The ShimmerEngineering profile on
-# nuget.org holds a policy trusting this repo and this workflow file, so renaming the file
-# means updating that policy.
-# Pull requests that touch either package build and pack at the next patch version, and
-# publish nothing.
+# nuget.org holds a policy trusting this repo, this workflow file and the nuget-release
+# environment, which only master may deploy to. Renaming the file or the environment means
+# updating that policy.
+# Pull requests that touch either package run the build job at the next patch version, with
+# read-only permissions and no publish job.
 
 on:
   workflow_dispatch:
@@ -29,19 +32,22 @@ on:
       - '.github/workflows/PublishNuGet.yml'
 
 permissions:
-  contents: write
-  id-token: write
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
 
 jobs:
-  publish:
+  build:
 
     runs-on: windows-latest
 
     env:
       PACKAGE_DIR: ${{ github.workspace }}\nupkg-out
+
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      previous_tag: ${{ steps.version.outputs.previous_tag }}
 
     steps:
     - name: Check the release is from master
@@ -51,6 +57,7 @@ jobs:
         exit 1
     - uses: actions/checkout@v4
     - name: Work out the version
+      id: version
       env:
         BUMP: ${{ inputs.bump || 'patch' }}
       run: |
@@ -71,7 +78,8 @@ jobs:
         }
         "Previous release v$previous, this one v$version"
         "VERSION=$version" >> $env:GITHUB_ENV
-        "PREVIOUS_TAG=v$previous" >> $env:GITHUB_ENV
+        "version=$version" >> $env:GITHUB_OUTPUT
+        "previous_tag=v$previous" >> $env:GITHUB_OUTPUT
     - name: Stamp the version into Shimmer32FeetAPI's AssemblyInfo
       run: |
         # A non-SDK project: -p:Version sets its package version but not its assembly version.
@@ -97,29 +105,53 @@ jobs:
       with:
         name: nuget-packages
         path: ${{ env.PACKAGE_DIR }}
+
+  publish:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master'
+    needs: build
+
+    runs-on: windows-latest
+
+    # Only master may deploy to this environment, and the nuget.org policy only trusts tokens
+    # minted in it, so no other branch can publish whatever its copy of this file says.
+    environment: nuget-release
+
+    permissions:
+      contents: write
+      id-token: write
+
+    env:
+      PACKAGE_DIR: ${{ github.workspace }}\nupkg-out
+      VERSION: ${{ needs.build.outputs.version }}
+      PREVIOUS_TAG: ${{ needs.build.outputs.previous_tag }}
+
+    steps:
+    - name: Download packages
+      uses: actions/download-artifact@v4
+      with:
+        name: nuget-packages
+        path: ${{ env.PACKAGE_DIR }}
     - name: NuGet login
-      if: github.event_name == 'workflow_dispatch'
       id: login
       uses: NuGet/login@v1
       with:
         user: ShimmerEngineering
     - name: Push to nuget.org
-      if: github.event_name == 'workflow_dispatch'
       env:
         NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
       run: |
         # ShimmerAPI first: Shimmer32FeetAPI depends on this exact version of it.
-        # --skip-duplicate makes a re-run safe after a partial failure.
+        # --skip-duplicate makes "Re-run failed jobs" safe after a partial failure.
         foreach ($id in 'ShimmerAPI', 'Shimmer32FeetAPI') {
           dotnet nuget push "$env:PACKAGE_DIR\$id.$env:VERSION.nupkg" --api-key $env:NUGET_API_KEY --source https://api.nuget.org/v3/index.json --skip-duplicate
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         }
     - name: Create the tag and GitHub release
-      if: github.event_name == 'workflow_dispatch'
       env:
         GH_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
       run: |
-        # Last, so a failed push leaves no tag behind and a re-run picks the same version.
+        # Last, so a failed push leaves no tag behind.
         $notes = "NuGet: https://www.nuget.org/packages/ShimmerAPI/$env:VERSION and https://www.nuget.org/packages/Shimmer32FeetAPI/$env:VERSION"
         gh release create "v$env:VERSION" --target $env:GITHUB_SHA --title "Shimmer C# API Rev $env:VERSION" --notes $notes --generate-notes --notes-start-tag $env:PREVIOUS_TAG
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
