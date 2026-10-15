@@ -576,6 +576,19 @@ namespace ShimmerBluetoothTests
                 Assert.AreEqual(2, sdLog.PressureSensorWarnings.Count);
                 AssertPressureUncalibrated(sdLog.ReadPacketMsg(), 0x61A800, 0x190000);
             });
+
+            // A Shimmer3's sensor (BMP180, BMP280) is not one a Shimmer3R carries: uncalibrated with a warning, as for an unrecognised ID.
+            // The firmware never records one, so this only guards against a corrupt header.
+            foreach (byte sensorIdByte in new byte[] { 0x00, 0x01 })
+            {
+                AssertSdLog(WriteShimmer3RSdLogTestFile(SR38, 4, 2, null, packet, 1, 1, 18, sensorIdByte), sdLog =>
+                {
+                    Assert.AreEqual((int)sensorIdByte, sdLog.PressureSensorId);
+                    Assert.IsFalse(sdLog.isBmp581InUse());
+                    Assert.AreEqual(1, sdLog.PressureSensorWarnings.Count);
+                    AssertPressureUncalibrated(sdLog.ReadPacketMsg(), 0x61A800, 0x190000);
+                });
+            }
         }
 
         [TestMethod]
@@ -639,6 +652,39 @@ namespace ShimmerBluetoothTests
                 Assert.AreEqual(PRESSURE_SENSOR_BMP180, sdLog.PressureSensorId);
                 AssertPressureCalibrated(sdLog.ReadPacketMsg(), bmp180Expected);
             });
+
+            // A Shimmer3R's sensor (BMP390, BMP581) is not one a Shimmer3 carries: uncalibrated with a warning, as for an unrecognised ID.
+            // The firmware never records one, so this only guards against a corrupt header.
+            foreach (byte sensorIdByte in new byte[] { 0x02, 0x03 })
+            {
+                AssertSdLog(WriteShimmer3SdLogTestFile(SR48, 3, 0, Bmp280SdHeaderCalib, bmp280Packet, 1, 1, 6, sensorIdByte), sdLog =>
+                {
+                    Assert.AreEqual((int)sensorIdByte, sdLog.PressureSensorId);
+                    Assert.AreEqual(1, sdLog.PressureSensorWarnings.Count);
+                    AssertPressureUncalibrated(sdLog.ReadPacketMsg(), 0x655AC0, 0x7EED);
+                });
+            }
+        }
+
+        [TestMethod]
+        public void TestPressureSensorId_ForgottenOnReconnect()
+        {
+            // Each connection starts from the board rules, on a Shimmer3 as on a Shimmer3R: a sensor ID reported on an earlier connection
+            // is not carried over to the next. SR48-2-0 is a BMP180 board per the board rule, so a BMP280 can only come from the reply.
+            byte[] bmp280Response = new byte[2 + Bmp280SdHeaderCalib.Length]; // [length = 1 + 24][BMP280][24 coefficient bytes]
+            bmp280Response[0] = (byte)(1 + Bmp280SdHeaderCalib.Length);
+            bmp280Response[1] = (byte)PRESSURE_SENSOR_BMP280;
+            Array.Copy(Bmp280SdHeaderCalib, 0, bmp280Response, 2, Bmp280SdHeaderCalib.Length);
+            ShimmerPressureTestDevice device = new ShimmerPressureTestDevice((int)ShimmerVersion.SHIMMER3, (int)ExpansionBoardDetectShimmer3.EXP_BRD_GSR_UNIFIED, 2, 0, bmp280Response);
+            device.ReadPressureCalibrationCoefficients();
+            Assert.AreEqual(1, device.NumPressureCalibrationRequests);
+            Assert.AreEqual(PRESSURE_SENSOR_BMP280, device.PressureSensorId);
+
+            // Reconnected, and this time there is no reply
+            device.PressureCalibrationResponse = null;
+            device.ReadPressureCalibrationCoefficients();
+            Assert.AreEqual(2, device.NumPressureCalibrationRequests);
+            Assert.AreEqual(PRESSURE_SENSOR_UNKNOWN, device.PressureSensorId);
         }
 
         /// <summary>
@@ -782,20 +828,27 @@ namespace ShimmerBluetoothTests
         }
 
         /// <summary>
-        /// Shimmer3R LogAndStream v1.01.006 that answers 0xA7 with the given 0xA6 payload, or not at all (NACK) if it is null
+        /// Shimmer3R (or Shimmer3) LogAndStream v1.01.006 that answers 0xA7 with the given 0xA6 payload, or not at all (NACK) if it is null.
+        /// Changing the payload between calls stands for reconnecting.
         /// </summary>
         class ShimmerPressureTestDevice : ShimmerBluetooth
         {
-            private readonly byte[] PressureCalibrationResponse;
+            public byte[] PressureCalibrationResponse;
             public int NumPressureCalibrationRequests = 0;
 
             public ShimmerPressureTestDevice(int srId, int rev, int revSpecial, byte[] pressureCalibrationResponse)
+                : this((int)ShimmerVersion.SHIMMER3R, srId, rev, revSpecial, pressureCalibrationResponse)
             {
-                HardwareVersion = (int)ShimmerVersion.SHIMMER3R;
+            }
+
+            public ShimmerPressureTestDevice(int hardwareVersion, int srId, int rev, int revSpecial, byte[] pressureCalibrationResponse)
+            {
+                HardwareVersion = hardwareVersion;
                 FirmwareIdentifier = FW_IDENTIFIER_LOGANDSTREAM;
                 FirmwareMajor = 1;
                 FirmwareMinor = 1;
                 FirmwareInternal = 6;
+                CompatibilityCode = 9; //Above 8, so a Shimmer3 asks with 0xA7 rather than the BMP180/BMP280 commands
                 ExpansionBoardId = srId;
                 ExpansionBoardRev = rev;
                 ExpansionBoardRevSpecial = revSpecial;

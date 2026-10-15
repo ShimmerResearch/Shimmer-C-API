@@ -563,7 +563,8 @@ public void ProcessSDLogHeader(byte[] byteArrayInfo)
         /// <summary>
         /// Sets PressureSensorId from the SD header's pressure sensor ID (SDH_PRESSURE_SENSOR_ID, DEV-1123) when the firmware records it, and
         /// otherwise from the board rules as before (GetPressureSensorFromBoardRules()). A recorded ID overrides the board rules. An ID this API
-        /// does not recognise is kept as is, never replaced by the board rules, so that no BMP180/280/390/581 calibration is applied to it.
+        /// does not recognise, or a sensor this hardware does not carry, is kept as is, never replaced by the board rules, so that no
+        /// BMP180/280/390/581 calibration is applied to it.
         /// </summary>
         private void SetPressureSensorIdFromSdHeader(byte[] byteArrayInfo)
         {
@@ -589,9 +590,10 @@ public void ProcessSDLogHeader(byte[] byteArrayInfo)
             {
                 AddPressureSensorWarning("The pressure sensor (ID " + PressureSensorId + ") was inferred from the SR number by the firmware, not confirmed by chip ID");
             }
-            if (PressureSensorId > PRESSURE_SENSOR_BMP581)
+            //Includes the other platform's sensors, which the firmware never records: a BMP180/280 on a Shimmer3R, a BMP390/581 on a Shimmer3
+            if (!IsPressureSensorOnThisHardware(PressureSensorId))
             {
-                AddPressureSensorWarning("Unrecognised pressure sensor ID " + PressureSensorId + " in the SD header: pressure and temperature are output uncalibrated");
+                AddPressureSensorWarning("Unrecognised pressure sensor ID " + PressureSensorId + " for this hardware in the SD header: pressure and temperature are output uncalibrated");
             }
             else if (PressureSensorId != boardRuleSensorId)
             {

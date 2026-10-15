@@ -149,8 +149,8 @@ namespace ShimmerAPI
         /// <summary>
         /// Pressure sensor fitted (PRESSURE_SENSOR_BMP180/BMP280/BMP390/BMP581). Set from the sensor ID in the 0xA6 response, or
         /// on a Shimmer3R from the SR number when the device does not report it (see isShimmer3RwithBmp581()). PRESSURE_SENSOR_UNKNOWN until then.
-        /// An SD log sets it from the header (see ShimmerSDLog), where it can also be PRESSURE_SENSOR_NONE or an ID this API does not recognise;
-        /// the pressure channels are then output uncalibrated (see GetPressureSensorInUse()).
+        /// An SD log sets it from the header (see ShimmerSDLog), where it can also be PRESSURE_SENSOR_NONE, an ID this API does not recognise, or a
+        /// sensor this hardware does not carry; the pressure channels are then output uncalibrated (see GetPressureSensorInUse()).
         /// </summary>
         public int PressureSensorId { get; protected set; } = PRESSURE_SENSOR_UNKNOWN;
         protected double BatteryVoltage;
@@ -2422,16 +2422,34 @@ namespace ShimmerAPI
 
         /// <summary>
         /// The pressure sensor whose calibration applies: PressureSensorId once it is known, otherwise GetPressureSensorFromBoardRules().
-        /// Anything other than PRESSURE_SENSOR_BMP180/BMP280/BMP390/BMP581 (PRESSURE_SENSOR_NONE, or a sensor ID this API does not recognise)
-        /// means no calibration applies, and the pressure and temperature channels are output uncalibrated.
+        /// PRESSURE_SENSOR_NONE if no calibration applies, and the pressure and temperature channels are output uncalibrated: no sensor fitted,
+        /// a sensor ID this API does not recognise, or a sensor this hardware does not carry (see IsPressureSensorOnThisHardware()).
         /// </summary>
         protected int GetPressureSensorInUse()
         {
-            if (PressureSensorId != PRESSURE_SENSOR_UNKNOWN)
+            int sensorId = PressureSensorId;
+            if (sensorId == PRESSURE_SENSOR_UNKNOWN)
             {
-                return PressureSensorId;
+                sensorId = GetPressureSensorFromBoardRules();
             }
-            return GetPressureSensorFromBoardRules();
+            return IsPressureSensorOnThisHardware(sensorId) ? sensorId : PRESSURE_SENSOR_NONE;
+        }
+
+        /// <summary>
+        /// True if this hardware carries the sensor: the BMP390 or BMP581 on a Shimmer3R, the BMP180 or BMP280 on a Shimmer3.
+        /// The firmware never reports the other platform's sensors. Mirrors SdHeaderPressureSensorId.isSensorHandled() in the Java driver.
+        /// </summary>
+        protected bool IsPressureSensorOnThisHardware(int sensorId)
+        {
+            if (HardwareVersion == (int)ShimmerBluetooth.ShimmerVersion.SHIMMER3R)
+            {
+                return sensorId == PRESSURE_SENSOR_BMP390 || sensorId == PRESSURE_SENSOR_BMP581;
+            }
+            if (HardwareVersion == (int)ShimmerBluetooth.ShimmerVersion.SHIMMER3)
+            {
+                return sensorId == PRESSURE_SENSOR_BMP180 || sensorId == PRESSURE_SENSOR_BMP280;
+            }
+            return false;
         }
 
         /// <summary>
@@ -4243,7 +4261,7 @@ namespace ShimmerAPI
 
                 if (((EnabledSensors & (int)SensorBitmapShimmer3.SENSOR_BMP180_PRESSURE) > 0))
                 {
-                    //Stays null for no sensor fitted or an unrecognised sensor ID (SD log), whose channels are output uncalibrated
+                    //Stays null for no sensor fitted, an unrecognised sensor ID or a sensor this hardware does not carry (SD log), whose channels are output uncalibrated
                     double[] bmpX80caldata = null;
                     int iUP = getSignalIndex(Shimmer3Configuration.SignalNames.PRESSURE);
                     int iUT = getSignalIndex(Shimmer3Configuration.SignalNames.TEMPERATURE);
@@ -6343,6 +6361,9 @@ namespace ShimmerAPI
         /// </summary>
         public void ReadPressureCalibrationCoefficients()
         {
+            //Forget any sensor ID from an earlier connection, on a Shimmer3 as on a Shimmer3R, so that this device's reply or the board rules decide.
+            //The Java driver does the same whenever the expansion board details change.
+            PressureSensorId = PRESSURE_SENSOR_UNKNOWN;
             if (HardwareVersion == (int)ShimmerVersion.SHIMMER3)
             {
                 if (FirmwareIdentifier == FW_IDENTIFIER_LOGANDSTREAM && CompatibilityCode > 8)
@@ -6366,7 +6387,6 @@ namespace ShimmerAPI
             }
             else if (HardwareVersion == (int)ShimmerVersion.SHIMMER3R)
             {
-                PressureSensorId = PRESSURE_SENSOR_UNKNOWN;
                 WriteBytes(new byte[1] { (byte)PacketTypeShimmer3RSDBT.GET_PRESSURE_CALIBRATION_COEFFICIENTS_COMMAND }, 0, 1);
                 System.Threading.Thread.Sleep(800);
                 //No sensor ID received: LogAndStream v1.01.006 NACKs this command on a BMP581 (a NACK is otherwise ignored by the
