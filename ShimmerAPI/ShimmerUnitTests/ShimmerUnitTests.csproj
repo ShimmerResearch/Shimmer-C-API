@@ -59,6 +59,7 @@
     <Compile Include="ShimmerLogAndStreamS3RSimulatorTest.cs" />
     <Compile Include="ShimmerLogAndStreamS3SimulatorTest.cs" />
     <Compile Include="ShimmerBluetoothReadData.cs" />
+    <Compile Include="ShimmerCrcFirmwareTest.cs" />
     <Compile Include="ShimmerGsrDecodeTest.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="ShimmerTest.cs" />
