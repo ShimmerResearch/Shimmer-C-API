@@ -2,6 +2,9 @@ name: PublishNuGet
 
 # Publishes ShimmerAPI and Shimmer32FeetAPI to nuget.org when a GitHub release is published.
 # Bump <Version> in both csproj files first; the release tag (vX.Y.Z) must match it.
+# Uses nuget.org trusted publishing: no stored API key. The ShimmerEngineering profile on
+# nuget.org holds a policy trusting this repo and this workflow file, so renaming the file
+# means updating that policy.
 # Pull requests that touch either package only build and pack, so the step that pushes is the
 # only one a release adds.
 
@@ -18,6 +21,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   publish:
@@ -53,11 +57,17 @@ jobs:
       with:
         name: nuget-packages
         path: ${{ env.PACKAGE_DIR }}
+    - name: NuGet login
+      if: github.event_name == 'release'
+      id: login
+      uses: NuGet/login@v1
+      with:
+        user: ShimmerEngineering
     - name: Push to nuget.org
       if: github.event_name == 'release'
       env:
         TAG: ${{ github.event.release.tag_name }}
-        NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
       run: |
         $version = $env:TAG -replace '^v', ''
         # ShimmerAPI first: Shimmer32FeetAPI depends on this exact version of it.

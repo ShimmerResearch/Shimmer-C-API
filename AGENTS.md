@@ -31,8 +31,11 @@ tests, `ShimmerCaptureXamarin` — is **never built by CI**.
 ## Releases publish to NuGet from CI
 
 `PublishNuGet.yml` runs when a GitHub release is published. It builds `ShimmerAPI` and
-`Shimmer32FeetAPI` in Release and pushes both to nuget.org (profile `ShimmerEngineering`) with the
-repo secret `NUGET_API_KEY`. To release:
+`Shimmer32FeetAPI` in Release and pushes both to nuget.org (profile `ShimmerEngineering`) through
+**trusted publishing** — there is no API key to store or renew. Instead, a policy on that nuget.org
+profile trusts `ShimmerResearch/Shimmer-C-API` and the workflow file name `PublishNuGet.yml`, and each
+run exchanges GitHub's OIDC token for a one-hour key. Renaming the workflow file or moving the repo
+breaks publishing until the policy is updated to match. To release:
 
 1. Bump `<Version>` in `ShimmerAPI/ShimmerAPI/ShimmerAPI.csproj` and
    `Shimmer32FeetAPI/Shimmer32FeetAPI.csproj`, and `AssemblyVersion`/`AssemblyFileVersion` in
