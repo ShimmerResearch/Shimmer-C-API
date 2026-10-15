@@ -28,6 +28,22 @@ Two workflows, both triggered on push to `master` and PRs into it:
 Anything outside those two solutions — every example app, the 32Feet apps, the gRPC and protobuf
 tests, `ShimmerCaptureXamarin` — is **never built by CI**.
 
+## Releases publish to NuGet from CI
+
+`PublishNuGet.yml` runs when a GitHub release is published. It builds `ShimmerAPI` and
+`Shimmer32FeetAPI` in Release and pushes both to nuget.org (profile `ShimmerEngineering`) with the
+repo secret `NUGET_API_KEY`. To release:
+
+1. Bump `<Version>` in `ShimmerAPI/ShimmerAPI/ShimmerAPI.csproj` and
+   `Shimmer32FeetAPI/Shimmer32FeetAPI.csproj`, and `AssemblyVersion`/`AssemblyFileVersion` in
+   `Shimmer32FeetAPI/Properties/AssemblyInfo.cs` — the workflow checks only the csproj versions.
+2. Merge, then publish a release tagged `v` + that version, e.g. `v1.3.12`.
+
+A tag that does not match both csproj versions fails the run before anything is pushed. ShimmerAPI is
+pushed first because the Shimmer32FeetAPI package depends on that exact ShimmerAPI version.
+`--skip-duplicate` makes a re-run safe. PRs that touch either package run the same workflow pack-only
+and attach the `.nupkg` files as an artifact.
+
 ## The same logic exists three times in this repo
 
 Cross-repo sibling APIs are the well-known trap. This repo has the problem *internally* as well, so

@@ -1,0 +1,68 @@
+name: PublishNuGet
+
+# Publishes ShimmerAPI and Shimmer32FeetAPI to nuget.org when a GitHub release is published.
+# Bump <Version> in both csproj files first; the release tag (vX.Y.Z) must match it.
+# Pull requests that touch either package only build and pack, so the step that pushes is the
+# only one a release adds.
+
+on:
+  release:
+    types: [ published ]
+  pull_request:
+    branches: [ master ]
+    paths:
+      - 'ShimmerAPI/ShimmerAPI/**'
+      - 'Shimmer32FeetAPI/**'
+      - 'license.md'
+      - '.github/workflows/PublishNuGet.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+
+    runs-on: windows-latest
+
+    env:
+      PACKAGE_DIR: ${{ github.workspace }}\nupkg-out
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Setup MSBuild Path
+      uses: microsoft/setup-msbuild@v2
+    - name: Build and pack ShimmerAPI
+      run: msbuild ShimmerAPI/ShimmerAPI/ShimmerAPI.csproj -restore -p:Configuration=Release "-p:PackageOutputPath=$env:PACKAGE_DIR"
+    - name: Build and pack Shimmer32FeetAPI
+      run: msbuild Shimmer32FeetAPI/Shimmer32FeetAPI.csproj -restore -p:Configuration=Release "-p:PackageOutputPath=$env:PACKAGE_DIR"
+    - name: Check packages match the release tag
+      if: github.event_name == 'release'
+      env:
+        TAG: ${{ github.event.release.tag_name }}
+      run: |
+        $version = $env:TAG -replace '^v', ''
+        foreach ($id in 'ShimmerAPI', 'Shimmer32FeetAPI') {
+          if (-not (Test-Path "$env:PACKAGE_DIR\$id.$version.nupkg")) {
+            $packed = (Get-ChildItem $env:PACKAGE_DIR -Filter *.nupkg).Name -join ', '
+            Write-Error "No $id.$version.nupkg - release tag $env:TAG does not match <Version> in $id's csproj. Packed: $packed"
+            exit 1
+          }
+        }
+    - name: Upload packages
+      uses: actions/upload-artifact@v4
+      with:
+        name: nuget-packages
+        path: ${{ env.PACKAGE_DIR }}
+    - name: Push to nuget.org
+      if: github.event_name == 'release'
+      env:
+        TAG: ${{ github.event.release.tag_name }}
+        NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+      run: |
+        $version = $env:TAG -replace '^v', ''
+        # ShimmerAPI first: Shimmer32FeetAPI depends on this exact version of it.
+        # --skip-duplicate makes a re-run safe after a partial failure.
+        foreach ($id in 'ShimmerAPI', 'Shimmer32FeetAPI') {
+          dotnet nuget push "$env:PACKAGE_DIR\$id.$version.nupkg" --api-key $env:NUGET_API_KEY --source https://api.nuget.org/v3/index.json --skip-duplicate
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        }
