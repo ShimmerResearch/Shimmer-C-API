@@ -35,7 +35,7 @@
   </PropertyGroup>
   <PropertyGroup>
     <PackageId>Shimmer32FeetAPI</PackageId>
-    <Version>1.3.10</Version>
+    <Version>1.3.11</Version>
     <Authors>Shimmer Sensing</Authors>
     <Description>Bluetooth/BLE helpers for Shimmer using 32feet.NET and InTheHand.BluetoothLE.</Description>
     <RepositoryUrl>https://github.com/ShimmerEngineering/Shimmer-C-API</RepositoryUrl>

@@ -4,7 +4,7 @@
     <TargetFramework>netstandard2.0</TargetFramework>
     <OutputType>Library</OutputType>
     <Description>Library to communicate with Shimmer devices</Description>
-    <Version>1.3.10</Version>
+    <Version>1.3.11</Version>
     <PackageLicenseFile>license.md</PackageLicenseFile>
     <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
   </PropertyGroup>

@@ -16,9 +16,16 @@ namespace ShimmerAPI
         protected String macAddress { get; set; }
         ConcurrentQueue<byte> cq = new ConcurrentQueue<byte>();
         private static bool Debug = false;
-        public ShimmerLogAndStream32FeetBLE(String devID, String bMacAddress)
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="devID"></param>
+        /// <param name="bMacAddress"> for example 114f439f84aa</param>
+        /// <param name="hwVersion"></param>
+        public ShimmerLogAndStream32FeetBLE(String devID, String bMacAddress, ShimmerVersion hwVersion)
           : base(devID)
         {
+            HardwareVersion = (int)hwVersion;
             macAddress = bMacAddress;
         }
 
@@ -75,6 +82,21 @@ namespace ShimmerAPI
                 BluetoothUuid TxID = BluetoothUuid.FromGuid(new Guid("49535343-8841-43f4-a8d4-ecbe34729bb3"));
                 BluetoothUuid RxID = BluetoothUuid.FromGuid(new Guid("49535343-1e4d-4bd9-ba61-23c647249616"));
                 BluetoothUuid ServiceID = BluetoothUuid.FromGuid(new Guid("49535343-fe7d-4ae5-8fa9-9fafd205e455"));
+
+                if (HardwareVersion == (int)ShimmerVersion.SHIMMER3R)
+                {
+                    TxID = BluetoothUuid.FromGuid(new Guid("65333333-A115-11E2-9E9A-0800200CA102"));
+                    RxID = BluetoothUuid.FromGuid(new Guid("65333333-A115-11E2-9E9A-0800200CA101"));
+                    ServiceID = BluetoothUuid.FromGuid(new Guid("65333333-A115-11E2-9E9A-0800200CA100"));
+                }
+                else if (HardwareVersion == (int)ShimmerVersion.SHIMMER3)
+                {
+                    TxID = BluetoothUuid.FromGuid(new Guid("49535343-8841-43f4-a8d4-ecbe34729bb3"));
+                    RxID = BluetoothUuid.FromGuid(new Guid("49535343-1e4d-4bd9-ba61-23c647249616"));
+                    ServiceID = BluetoothUuid.FromGuid(new Guid("49535343-fe7d-4ae5-8fa9-9fafd205e455"));
+                }
+
+
                 ServiceTXRX = bluetoothDevice.Gatt.GetPrimaryServiceAsync(ServiceID).GetAwaiter().GetResult();
                 if (ServiceTXRX != null)
                 {

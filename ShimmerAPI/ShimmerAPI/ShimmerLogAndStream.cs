@@ -723,8 +723,15 @@ namespace ShimmerAPI
             }
             else
             {
-                //ReadCalibDump();
-                ReadCalibrationParameters("All");
+                var t = this.GetType();          
+                if (HardwareVersion == (int)ShimmerBluetooth.ShimmerVersion.SHIMMER3 && t.Name.Equals("ShimmerLogAndStream32FeetBLE")) // temporary fix to get shimmer3 BLE working, not recommended for use
+                {
+                    ReadCalibDump();
+                }
+                else
+                {
+                    ReadCalibrationParameters("All");
+                }
             }
 
             status_text = "Acquiring EXG1 configure settings...";
