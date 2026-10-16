@@ -687,6 +687,46 @@ namespace ShimmerBluetoothTests
             Assert.AreEqual(PRESSURE_SENSOR_UNKNOWN, device.PressureSensorId);
         }
 
+        [TestMethod]
+        public void TestBatteryChannel_x2Divider()
+        {
+            // DEV-622: the battery channel is 3.0 V reference over 12 bits, times the x2 divider, as in firmware adc.c (Shimmer3) and
+            // hal_adc.c (Shimmer3R) and Java's ShimmerObject. 2730 counts are 2000 mV at the ADC pin, so 4000 mV of battery.
+            byte[] packet = { 0x00, 0x00, 0x00, 0xAA, 0x0A }; // timestamp, battery 2730 (0x0AAA)
+
+            byte[] shimmer3RHeader = new byte[384];
+            shimmer3RHeader[0] = 0x80; // sampling rate 32768/128 = 256Hz
+            shimmer3RHeader[31] = (byte)ShimmerVersion.SHIMMER3R;
+            shimmer3RHeader[35] = (byte)FW_IDENTIFIER_LOGANDSTREAM;
+            shimmer3RHeader[37] = 1;
+            shimmer3RHeader[38] = 1;
+            shimmer3RHeader[39] = 18;
+            shimmer3RHeader[224] = 0xFF;
+            shimmer3RHeader[314] = 1; // one channel: battery (0x03)
+            shimmer3RHeader[315] = 0x03;
+            AssertSdLog(WriteSdLogTestFile(shimmer3RHeader, packet), sdLog => AssertBatteryChannel(sdLog.ReadPacketMsg(), 2730, 4000));
+
+            byte[] shimmer3Header = new byte[256];
+            shimmer3Header[0] = 0x80;
+            shimmer3Header[4] = 0x20; // enabled sensors (bytes 3-7): battery, bit 13
+            shimmer3Header[31] = (byte)ShimmerVersion.SHIMMER3;
+            shimmer3Header[35] = (byte)FW_IDENTIFIER_LOGANDSTREAM;
+            shimmer3Header[37] = 1;
+            shimmer3Header[38] = 1;
+            shimmer3Header[39] = 6;
+            shimmer3Header[224] = 0xFF;
+            AssertSdLog(WriteSdLogTestFile(shimmer3Header, packet), sdLog => AssertBatteryChannel(sdLog.ReadPacketMsg(), 2730, 4000));
+
+            // The battery status reply (GET_VBATT) keeps 1.988, as Java's ShimmerBattStatusDetails does
+            Assert.AreEqual(3.976, adcValToBattVoltage(2730), 1e-9);
+        }
+
+        private static void AssertBatteryChannel(ObjectCluster ojc, double expectedRaw, double expectedMilliVolts)
+        {
+            Assert.AreEqual(expectedRaw, ojc.GetData(Shimmer3Configuration.SignalNames.V_SENSE_BATT, ShimmerConfiguration.SignalFormats.RAW).Data);
+            Assert.AreEqual(expectedMilliVolts, ojc.GetData(Shimmer3Configuration.SignalNames.V_SENSE_BATT, ShimmerConfiguration.SignalFormats.CAL).Data, 1e-9);
+        }
+
         /// <summary>
         /// Parses the SD log, runs the assertions on it and deletes the file. The ShimmerSDLog is only referenced from the assertions,
         /// so it is unreachable, and its file can be released, once they return.
