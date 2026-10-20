@@ -63,6 +63,7 @@
     <Compile Include="ShimmerCrcFirmwareTest.cs" />
     <Compile Include="ShimmerCrcStatusPushTest.cs" />
     <Compile Include="ShimmerCrcSwitchTest.cs" />
+    <Compile Include="ShimmerNackTest.cs" />
     <Compile Include="ShimmerGsrDecodeTest.cs" />
     <Compile Include="ShimmerSDLogLnAccelRangeTest.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
