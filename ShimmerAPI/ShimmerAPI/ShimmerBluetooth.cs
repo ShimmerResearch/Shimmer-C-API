@@ -5965,7 +5965,8 @@ namespace ShimmerAPI
         /// <summary>
         /// Whether this API will turn the Bluetooth CRC on for the connected firmware. False on firmware
         /// without SET_CRC_COMMAND, and on Shimmer3R LogAndStream before 1.0.11, which turns the CRC off
-        /// by itself whenever sensing stops (see KeepsCRCWhenSensingStops).
+        /// by itself whenever sensing stops (see KeepsCRCWhenSensingStops). True on Shimmer3R LogAndStream
+        /// 1.0.24 to 1.0.49, where only a 2-byte CRC is refused (see TwoByteCRCOverrunsStatusPush).
         /// </summary>
         /// <returns></returns>
         /// <exception cref="Exception">If device is not connected/streaming</exception>
@@ -6028,6 +6029,48 @@ namespace ShimmerAPI
             return "Shimmer3R " + FirmwareVersionFullName + " turns it off by itself whenever streaming or logging stops, "
                 + "without telling the host, so every reply after a stop would be misread. "
                 + "Update to LogAndStream 1.0.11 or later to use a CRC.";
+        }
+
+        /// <summary>
+        /// True when a 2-byte Bluetooth CRC overruns the status push the firmware sends by itself, and the
+        /// sensor hardfaults: Shimmer3R LogAndStream 1.0.24 to 1.0.49 (DEV-621, fixed in 1.0.50).
+        /// WriteCRCMode refuses TWO_BYTE there, and a constructor's TWO_BYTE is turned on as ONE_BYTE
+        /// (DEV-1141).
+        /// <para>
+        /// Those releases build the push in a six-byte buffer, uint8_t selfcmd[6] in
+        /// ShimBt_instreamStatusRespSend (log-and-stream-common Comms/shimmer_bt_uart.c:2262 at f39be8c1f,
+        /// which 1.0.49 pins): the ACK prefix, 0x8A 0x71, the status and the CRC. From 1.0.24 the status
+        /// is two bytes (IsTwoByteStatusResponseSupported), so a 2-byte CRC makes seven, and the seventh
+        /// is written past the end of the buffer. Every release from 1.0.50 pins log-and-stream-common
+        /// merge 4fb8696, which sizes the buffer for it. A 1-byte CRC fits, as does a 2-byte one wherever
+        /// the status is one byte: Shimmer3R 1.0.23 and earlier, and every Shimmer3.
+        /// </para>
+        /// <para>
+        /// The firmware pushes on docking and undocking, and when the user button, a trial-duration
+        /// expiry or a low battery starts or stops sensing. The host's own starts and stops do not push,
+        /// so the hardfault can come at any point after the CRC goes on, mid-stream included.
+        /// </para>
+        /// <para>
+        /// Turning the push's ACK prefix off first (SET_INSTREAM_RESPONSE_ACK_PREFIX_STATE, 0xA3) also
+        /// makes it fit, and the web SDK keeps a 2-byte CRC that way (shimmer-web-sdk
+        /// twoByteCrcOverrunsStatusPush). This API does not, because while streaming ReadData only finds
+        /// a status push behind its ACK prefix: one without it would be dropped, along with any stop it
+        /// reports.
+        /// </para>
+        /// </summary>
+        public bool TwoByteCRCOverrunsStatusPush()
+        {
+            return IsTwoByteStatusResponseSupported() && !compareVersions(1, 0, 50);
+        }
+
+        /// <summary>
+        /// Why a 2-byte CRC is refused where it overruns the status push, for the exception WriteCRCMode
+        /// throws and the warning a constructor's TWO_BYTE gets.
+        /// </summary>
+        protected String GetTwoByteCRCRefusalReason()
+        {
+            return "Shimmer3R " + FirmwareVersionFullName + " hardfaults when a status message it sends by itself, "
+                + "on docking or undocking, the user button, a trial-duration expiry or a low battery, carries a 2-byte CRC.";
         }
 
         /// <summary>
@@ -6510,20 +6553,28 @@ namespace ShimmerAPI
 
         /// <summary>
         /// Turns the Bluetooth CRC on or off. Turning it on is refused, and nothing is sent, wherever
-        /// IsCRCSupported is false. Turning it off is never refused on firmware that has the command,
-        /// including Shimmer3R LogAndStream before 1.0.11.
+        /// IsCRCSupported is false, and a 2-byte CRC is refused the same way wherever
+        /// TwoByteCRCOverrunsStatusPush is true. Turning it off is never refused on firmware that has the
+        /// command, including Shimmer3R LogAndStream before 1.0.11.
         /// <para>
         /// The firmware switches its CRC before it ACKs the command, so the read thread switches at
         /// that ACK. If no ACK arrives within the 300 ms wait, the mode is applied at the end of it.
         /// </para>
         /// </summary>
         /// <exception cref="Exception">If the device is not connected, the firmware has no SET_CRC_COMMAND,
-        /// or a CRC is asked of firmware that turns it off whenever sensing stops</exception>
+        /// a CRC is asked of firmware that turns it off whenever sensing stops, or a 2-byte CRC is asked
+        /// of firmware whose status push it overruns</exception>
         public void WriteCRCMode(BTCRCMode mode)
         {
             // Off goes wherever the command exists: it can never leave this API expecting a CRC
             if (IsCRCSupported() || (mode == BTCRCMode.OFF && GetCompatibilityCode() >= 8))
             {
+                // Refused before the wait flag is set, so a refused call never leaves it set
+                if (mode == BTCRCMode.TWO_BYTE && TwoByteCRCOverrunsStatusPush())
+                {
+                    throw new Exception("Cannot turn a 2-byte Bluetooth CRC on: " + GetTwoByteCRCRefusalReason()
+                        + " Use a 1-byte CRC, or update to LogAndStream 1.0.50 or later.");
+                }
                 mCRCModeAfterACK = mode;
                 mWaitingForCRCModeACK = true;
                 try
