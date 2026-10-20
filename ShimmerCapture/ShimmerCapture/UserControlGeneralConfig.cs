@@ -204,7 +204,14 @@ namespace ShimmerAPI
                         comboBoxPressureRes.Items.AddRange(ShimmerBluetooth.LIST_OF_PRESSURE_RESOLUTION_SHIMMER3);
                     } else if (PConfiguration.PControlForm.ShimmerDevice.GetShimmerVersion() == (int)ShimmerBluetooth.ShimmerVersion.SHIMMER3R)
                     {
-                        comboBoxPressureRes.Items.AddRange(ShimmerBluetooth.LIST_OF_PRESSURE_RESOLUTION_SHIMMER3R);
+                        if (PConfiguration.PControlForm.ShimmerDevice.isBmp581InUse())
+                        {
+                            comboBoxPressureRes.Items.AddRange(ShimmerBluetooth.LIST_OF_PRESSURE_RESOLUTION_SHIMMER3R_BMP581);
+                        }
+                        else
+                        {
+                            comboBoxPressureRes.Items.AddRange(ShimmerBluetooth.LIST_OF_PRESSURE_RESOLUTION_SHIMMER3R);
+                        }
                     }
 
                     comboBoxPressureRes.AutoCompleteMode = AutoCompleteMode.SuggestAppend;
