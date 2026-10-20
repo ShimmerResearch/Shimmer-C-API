@@ -251,6 +251,8 @@ public void ProcessSDLogHeader(byte[] byteArrayInfo)
             int msbGyroRange = (byteArrayInfo[12] >> 2) & 0x01;
             SetGyroRange(gyroRange + (msbGyroRange << 2));
 
+            SetLNAccelRange((byteArrayInfo[11] >> 6) & 0x03);
+
             int pressureResolution = (byteArrayInfo[11] >> 4) & 0x03;
             int msbPressureResolution = (byteArrayInfo[12]) & 0x01;
             SetPressureResolution(pressureResolution + (msbPressureResolution << 2));
