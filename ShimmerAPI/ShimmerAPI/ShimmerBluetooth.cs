@@ -98,6 +98,13 @@ namespace ShimmerAPI
         protected int ShimmerState = SHIMMER_STATE_NONE;
 
         protected bool mWaitingForStartStreamingACK = false;
+        /// <summary>
+        /// Set while WriteCRCMode waits for the ACK to SET_CRC_COMMAND. The firmware switches its CRC
+        /// before it builds that ACK, so the ACK is framed in the new mode, mCRCModeAfterACK, and
+        /// ReadData switches to it there.
+        /// </summary>
+        protected volatile bool mWaitingForCRCModeACK = false;
+        protected BTCRCMode mCRCModeAfterACK = BTCRCMode.OFF;
         private int StreamTimeOutCount = 0;
         protected bool StreamingACKReceived = false;
         protected String DeviceName;
@@ -146,6 +153,13 @@ namespace ShimmerAPI
         protected int ExpansionBoardId;
         protected int ExpansionBoardRev;
         protected int ExpansionBoardRevSpecial;
+        /// <summary>
+        /// Pressure sensor fitted (PRESSURE_SENSOR_BMP180/BMP280/BMP390/BMP581). Set from the sensor ID in the 0xA6 response, or
+        /// on a Shimmer3R from the SR number when the device does not report it (see isShimmer3RwithBmp581()). PRESSURE_SENSOR_UNKNOWN until then.
+        /// An SD log sets it from the header (see ShimmerSDLog), where it can also be PRESSURE_SENSOR_NONE, an ID this API does not recognise, or a
+        /// sensor this hardware does not carry; the pressure channels are then output uncalibrated (see GetPressureSensorInUse()).
+        /// </summary>
+        public int PressureSensorId { get; protected set; } = PRESSURE_SENSOR_UNKNOWN;
         protected double BatteryVoltage;
         protected int ChargingStatus;
         protected virtual bool ShouldAddSystemTimestamp => true;
@@ -214,6 +228,17 @@ namespace ShimmerAPI
         public const sbyte BMP3_W_MIN_PRES = 5;
         public const sbyte BMP3_W_MAX_PRES = 6;
 
+        //Pressure sensor IDs reported in the PRESSURE_CALIBRATION_COEFFICIENTS_RESPONSE (0xA6), see log-and-stream-common Comms/shimmer_bt_uart.c
+        public const int PRESSURE_SENSOR_UNKNOWN = -1;
+        public const int PRESSURE_SENSOR_BMP180 = 0;
+        public const int PRESSURE_SENSOR_BMP280 = 1;
+        public const int PRESSURE_SENSOR_BMP390 = 2;
+        public const int PRESSURE_SENSOR_BMP581 = 3;
+        //No pressure sensor fitted, as recorded in the SD header (log-and-stream-common SDCard/shimmer_sd_header.h SDH_PRESSURE_SENSOR_ID)
+        public const int PRESSURE_SENSOR_NONE = 0xFE;
+        //Number of calibration coefficient bytes that follow the sensor ID in the 0xA6 response, indexed by sensor ID. The BMP581 outputs compensated data so it has none.
+        protected static readonly int[] PRESSURE_SENSOR_CALIB_BYTES_LENGTH = { 22, 24, 21, 0 };
+
         public double OffsetECGRALL = 2060;
         public double GainECGRALL = 175;
         public double OffsetECGLALL = 2060;
@@ -277,6 +302,11 @@ namespace ShimmerAPI
 
         protected BTCRCMode BluetoothCRCMode = BTCRCMode.OFF;
         protected BTCRCMode CRCModeToSetup = BTCRCMode.OFF;
+        /// <summary>
+        /// The CRC that follows a bare ACK, the whole reply to a SET command: F4 65, or F4 in one-byte
+        /// mode. No response code is 0xF4, in any Shimmer3 or Shimmer3R firmware.
+        /// </summary>
+        private static readonly byte[] BareAckCRC = ShimmerUartCrcCalc(new byte[] { (byte)PacketTypeShimmer2.ACK_COMMAND }, 1);
 
         public enum ShimmerIdentifier
         {
@@ -626,6 +656,7 @@ namespace ShimmerAPI
         public static readonly String[] LIST_OF_MAG_RANGE_SHIMMER3R = { "+/- 4Ga", "+/- 8Ga", "+/- 12Ga", "+/- 16Ga" };
         public static readonly String[] LIST_OF_PRESSURE_RESOLUTION_SHIMMER3 = { "Low", "Standard", "High", "Very High" };
         public static readonly String[] LIST_OF_PRESSURE_RESOLUTION_SHIMMER3R = { "Ultra Low", "Low", "Standard", "High", "Ultra High", "Highest" };
+        public static readonly String[] LIST_OF_PRESSURE_RESOLUTION_SHIMMER3R_BMP581 = { "Lowest Power", "Low", "Standard", "High", "High Res", "Very High Res", "Ultra High Res", "Highest Res" };
         public static readonly String[] LIST_OF_GSR_RANGE = { "8kOhm to 63kOhm", "63kOhm to 220kOhm", "220kOhm to 680kOhm", "680kOhm to 4.7MOhm", "Auto Range" };
         public static readonly String[] LIST_OF_EXG_GAINS_SHIMMER3 = new string[] { "1", "2", "3", "4", "6", "8", "12" };
 
@@ -734,7 +765,8 @@ namespace ShimmerAPI
 			1000.000, 	//Range 2
 			3300.000};  //Range 3
 
-        // Equation breaks down below 683 for range 3
+        // Equation breaks down below 683 on every range: 683 is the first code above the 0.5 V
+        // amplifier reference at 3.0 V (see CalibrateGsrDataToResistanceWithOpenCircuitLimit)
         public static readonly int GSR_UNCAL_LIMIT_RANGE3 = 683;
 
         public static readonly double[,] SHIMMER3_GSR_RESISTANCE_MIN_MAX_KOHMS = new double[,] {
@@ -1293,13 +1325,20 @@ namespace ShimmerAPI
             FlushInputConnection();
             KeepObjectCluster = null;
             UnalignedBytesReceived = new List<Byte>();
+            // A response code read straight after an ACK, which is the next byte to handle (see the ACK case)
+            int byteAfterAck = -1;
 
             while (!StopReading)
             {
                 try
                 {
                     byte b;
-                    if (UnalignedBytesReceived.Count() > 0)
+                    if (byteAfterAck >= 0)
+                    {
+                        b = (byte)byteAfterAck;
+                        byteAfterAck = -1;
+                    }
+                    else if (UnalignedBytesReceived.Count() > 0)
                     {
                         //Debug.WriteLine("Reuse Unaligned Bytes");
                         b = UnalignedBytesReceived[0];
@@ -1608,7 +1647,19 @@ namespace ShimmerAPI
                                 break;
                             case (byte)PacketTypeShimmer2.ACK_COMMAND:
                                 System.Console.WriteLine("ACK Received");
-                                if (mWaitingForStartStreamingACK)
+                                if (mWaitingForCRCModeACK)
+                                {
+                                    // The ACK to SET_CRC_COMMAND carries the new mode's CRC, so switch
+                                    // before dropping it. Read in the old mode, the CRC of a bare ACK
+                                    // (F4 65) was left behind, and 0x65 is DETECT_EXPANSION_BOARD_RESPONSE.
+                                    BluetoothCRCMode = mCRCModeAfterACK;
+                                    mWaitingForCRCModeACK = false;
+                                    for (int k = 0; k < (int)BluetoothCRCMode; k++)
+                                    {
+                                        ReadByte();
+                                    }
+                                }
+                                else if (mWaitingForStartStreamingACK)
                                 {
                                     SetState(SHIMMER_STATE_STREAMING);
                                     mWaitingForStartStreamingACK = false;
@@ -1622,6 +1673,29 @@ namespace ShimmerAPI
                                         }
                                     }
                                     StreamingACKReceived = true;
+                                }
+                                else if (BluetoothCRCMode != BTCRCMode.OFF)
+                                {
+                                    // A reply is the ACK, any response, then one CRC over both, and the drop
+                                    // below takes the CRC after a response. A bare ACK, the reply to a SET
+                                    // command, has no response, so its CRC comes straight after it. Read as a
+                                    // response code, its F4 took the first byte of the next reply with it,
+                                    // even the ACK to START_STREAMING_COMMAND. No response code is F4, so the
+                                    // next byte tells a bare ACK from a response.
+                                    byte next = (byte)ReadByte();
+                                    if (next == BareAckCRC[0])
+                                    {
+                                        for (int k = 1; k < (int)BluetoothCRCMode; k++)
+                                        {
+                                            ReadByte();
+                                        }
+                                    }
+                                    else
+                                    {
+                                        // Kept out of UnalignedBytesReceived, which StartStreaming replaces
+                                        // from the caller's thread
+                                        byteAfterAck = next;
+                                    }
                                 }
                                 break;
                             case (byte)PacketTypeShimmer2.ACCEL_CALIBRATION_RESPONSE:
@@ -1763,44 +1837,16 @@ namespace ShimmerAPI
 
                                 break;
                             case (byte)PacketTypeShimmer3RSDBT.PRESSURE_CALIBRATION_COEFFICIENTS_RESPONSE:
-
-                                byte[] length_chipidbytes = new byte[2];
-
-                                for (int m = 0; m < 2; m++)
+                                //[length = 1 + n][sensor ID][n calibration bytes]. Consume exactly the number of bytes the length declares so
+                                //that a response which does not match its sensor ID is rejected without desynchronising the stream.
+                                int pressureCalibLength = ReadByte();
+                                bufferbyte = new byte[1 + pressureCalibLength];
+                                bufferbyte[0] = (byte)pressureCalibLength;
+                                for (int p = 1; p <= pressureCalibLength; p++)
                                 {
-                                    length_chipidbytes[m] = (byte)ReadByte();
+                                    bufferbyte[p] = (byte)ReadByte();
                                 }
-
-                                if (length_chipidbytes[1] == 0) //bmp180
-                                {
-                                    bufferbyte = new byte[22];
-                                    for (int p = 0; p < 22; p++)
-                                    {
-                                        bufferbyte[p] = (byte)ReadByte();
-                                    }
-                                    CalculateBMP180PressureCalibrationCoefficientsResponse(bufferbyte);
-
-                                }
-                                else if (length_chipidbytes[1] == 1)    //bmp280
-                                {
-                                    bufferbyte = new byte[24];
-                                    for (int p = 0; p < 24; p++)
-                                    {
-                                        bufferbyte[p] = (byte)ReadByte();
-                                    }
-                                    CalculateBMP280PressureCalibrationCoefficientsResponse(bufferbyte);
-
-                                }
-                                else if (length_chipidbytes[1] == 2)    //bmp390
-                                {
-                                    bufferbyte = new byte[21];
-                                    for (int p = 0; p < 21; p++)
-                                    {
-                                        bufferbyte[p] = (byte)ReadByte();
-                                    }
-                                    CalculateBMP390PressureCalibrationCoefficientsResponse(bufferbyte);
-                                }
-
+                                InterpretPressureCalibrationCoefficientsResponse(bufferbyte);
                                 break;
                             case (byte)PacketTypeShimmer2.BLINK_LED_RESPONSE:
                                 bufferbyte = new byte[1];
@@ -1979,6 +2025,51 @@ namespace ShimmerAPI
             CloseConnection();
 
         }
+        /// <summary>
+        /// Interprets the payload of a PRESSURE_CALIBRATION_COEFFICIENTS_RESPONSE (0xA6), i.e. the bytes following the response ID:
+        /// [length = 1 + n][sensor ID][n calibration bytes], where n is 22 (BMP180), 24 (BMP280), 21 (BMP390) or 0 (BMP581).
+        /// See log-and-stream-common Comms/shimmer_bt_uart.c (GET_PRESSURE_CALIBRATION_COEFFICIENTS_COMMAND).
+        /// A response whose length does not match its sensor ID is rejected and PressureSensorId is left unchanged.
+        /// </summary>
+        /// <param name="payload">The length byte followed by the number of bytes it declares</param>
+        /// <returns>True if the sensor ID was recognised and the response was the expected length for it</returns>
+        public bool InterpretPressureCalibrationCoefficientsResponse(byte[] payload)
+        {
+            if (payload == null || payload.Length < 2 || payload[0] != payload.Length - 1)
+            {
+                Debug.WriteLine("Pressure calibration response rejected: malformed length");
+                return false;
+            }
+
+            int sensorId = payload[1];
+            int numCalibBytes = payload.Length - 2;
+            if (sensorId >= PRESSURE_SENSOR_CALIB_BYTES_LENGTH.Length || numCalibBytes != PRESSURE_SENSOR_CALIB_BYTES_LENGTH[sensorId])
+            {
+                Debug.WriteLine("Pressure calibration response rejected: sensor ID " + sensorId + " with " + numCalibBytes + " calibration bytes");
+                return false;
+            }
+
+            byte[] calibBytes = new byte[numCalibBytes];
+            Array.Copy(payload, 2, calibBytes, 0, numCalibBytes);
+            if (sensorId == PRESSURE_SENSOR_BMP180)
+            {
+                CalculateBMP180PressureCalibrationCoefficientsResponse(calibBytes);
+            }
+            else if (sensorId == PRESSURE_SENSOR_BMP280)
+            {
+                CalculateBMP280PressureCalibrationCoefficientsResponse(calibBytes);
+            }
+            else if (sensorId == PRESSURE_SENSOR_BMP390)
+            {
+                CalculateBMP390PressureCalibrationCoefficientsResponse(calibBytes);
+            }
+            //BMP581: no calibration coefficients, the sensor outputs compensated data
+
+            //The in-band sensor ID overrides any SR number based assumption
+            PressureSensorId = sensorId;
+            return true;
+        }
+
         public void CalculateBMP180PressureCalibrationCoefficientsResponse(byte[] bufferbyte)
         {
             AC1 = Calculatetwoscomplement((int)((int)(bufferbyte[1] & 0xFF) + ((int)(bufferbyte[0] & 0xFF) << 8)), 16);
@@ -2380,6 +2471,105 @@ namespace ShimmerAPI
             {
                 return false;
             }
+        }
+
+        /// <summary>
+        /// SR number rule for a BMP581 in place of the BMP390 (DEV-818), used when the device does not report its pressure sensor in-band
+        /// (0xA7 NACKed by LogAndStream v1.01.006 or not answered) and for SD log files whose header does not record the sensor ID.
+        /// Mirrors ShimBrd_isBmp581PresentPerSrNumber() in log-and-stream-common Boards/shimmer_boards.c:
+        /// SR31-11-2, SR38-4-2, SR47-8-2, SR48-7-2 up to (not including) SR48-8-0, SR48-8-2, SR49-4-2 and later revs.
+        /// SR48-8-0 and SR48-8-1 carry the BMP390. BMP581 support starts at LogAndStream v1.01.006.
+        /// </summary>
+        public Boolean isShimmer3RwithBmp581()
+        {
+            if ((HardwareVersion == (int)ShimmerBluetooth.ShimmerVersion.SHIMMER3R)
+                && compareVersions(FW_IDENTIFIER_LOGANDSTREAM, 1, 1, 6) && (
+                isExpansionBoardSrNumberGte((int)ExpansionBoardDetectShimmer3.SHIMMER3, 11, 2)
+                || isExpansionBoardSrNumberGte((int)ExpansionBoardDetectShimmer3.EXPANSION_PROTO3_DELUXE, 4, 2)
+                || isExpansionBoardSrNumberGte((int)ExpansionBoardDetectShimmer3.EXP_BRD_EXG_UNIFIED, 8, 2)
+                || (isExpansionBoardSrNumberGte((int)ExpansionBoardDetectShimmer3.EXP_BRD_GSR_UNIFIED, 7, 2)
+                    && !isExpansionBoardSrNumberGte((int)ExpansionBoardDetectShimmer3.EXP_BRD_GSR_UNIFIED, 8, 0))
+                || isExpansionBoardSrNumberGte((int)ExpansionBoardDetectShimmer3.EXP_BRD_GSR_UNIFIED, 8, 2)
+                || isExpansionBoardSrNumberGte((int)ExpansionBoardDetectShimmer3.EXP_BRD_BR_AMP_UNIFIED, 4, 2)))
+            {
+                return true;
+            }
+            else
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// True if the expansion board is srId and its rev.revSpecial is at least rev.revSpecial (rev compared first).
+        /// Mirrors ShimBrd_isBoardSrNumberGte() in log-and-stream-common Boards/shimmer_boards.c.
+        /// </summary>
+        protected Boolean isExpansionBoardSrNumberGte(int srId, int rev, int revSpecial)
+        {
+            return ExpansionBoardId == srId
+                && (ExpansionBoardRev > rev || (ExpansionBoardRev == rev && ExpansionBoardRevSpecial >= revSpecial));
+        }
+
+        /// <summary>
+        /// True if the pressure sensor is a BMP581. Uses the sensor ID reported by the device and, if none has been received,
+        /// the SR number rule (isShimmer3RwithBmp581()).
+        /// </summary>
+        public Boolean isBmp581InUse()
+        {
+            if (HardwareVersion != (int)ShimmerBluetooth.ShimmerVersion.SHIMMER3R)
+            {
+                return false;
+            }
+            if (PressureSensorId == PRESSURE_SENSOR_UNKNOWN)
+            {
+                return isShimmer3RwithBmp581();
+            }
+            return PressureSensorId == PRESSURE_SENSOR_BMP581;
+        }
+
+        /// <summary>
+        /// The pressure sensor whose calibration applies: PressureSensorId once it is known, otherwise GetPressureSensorFromBoardRules().
+        /// PRESSURE_SENSOR_NONE if no calibration applies, and the pressure and temperature channels are output uncalibrated: no sensor fitted,
+        /// a sensor ID this API does not recognise, or a sensor this hardware does not carry (see IsPressureSensorOnThisHardware()).
+        /// </summary>
+        protected int GetPressureSensorInUse()
+        {
+            int sensorId = PressureSensorId;
+            if (sensorId == PRESSURE_SENSOR_UNKNOWN)
+            {
+                sensorId = GetPressureSensorFromBoardRules();
+            }
+            return IsPressureSensorOnThisHardware(sensorId) ? sensorId : PRESSURE_SENSOR_NONE;
+        }
+
+        /// <summary>
+        /// True if this hardware carries the sensor: the BMP390 or BMP581 on a Shimmer3R, the BMP180 or BMP280 on a Shimmer3.
+        /// The firmware never reports the other platform's sensors. Mirrors SdHeaderPressureSensorId.isSensorHandled() in the Java driver.
+        /// </summary>
+        protected bool IsPressureSensorOnThisHardware(int sensorId)
+        {
+            if (HardwareVersion == (int)ShimmerBluetooth.ShimmerVersion.SHIMMER3R)
+            {
+                return sensorId == PRESSURE_SENSOR_BMP390 || sensorId == PRESSURE_SENSOR_BMP581;
+            }
+            if (HardwareVersion == (int)ShimmerBluetooth.ShimmerVersion.SHIMMER3)
+            {
+                return sensorId == PRESSURE_SENSOR_BMP180 || sensorId == PRESSURE_SENSOR_BMP280;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// The pressure sensor the board rules give when the device does not report one: the SR number rule (isShimmer3RwithBmp581()) on a
+        /// Shimmer3R, and isShimmer3withUpdatedSensors() (BMP280, otherwise BMP180) on a Shimmer3.
+        /// </summary>
+        protected int GetPressureSensorFromBoardRules()
+        {
+            if (HardwareVersion == (int)ShimmerBluetooth.ShimmerVersion.SHIMMER3R)
+            {
+                return isShimmer3RwithBmp581() ? PRESSURE_SENSOR_BMP581 : PRESSURE_SENSOR_BMP390;
+            }
+            return isShimmer3withUpdatedSensors() ? PRESSURE_SENSOR_BMP280 : PRESSURE_SENSOR_BMP180;
         }
 
 
@@ -3988,11 +4178,11 @@ namespace ShimmerAPI
                     if (HardwareVersion == (int)ShimmerBluetooth.ShimmerVersion.SHIMMER3R)
                     {
                         //datatemp = CalibrateShimmer3RAdcChannel(datatemp) * 1.988;
-                        datatemp = (CalibrateU12AdcValue(datatemp, 0, 3, 1) * 1.988);
+                        datatemp = (CalibrateU12AdcValue(datatemp, 0, 3, 1) * 2.0); //switch to 2.0 to match the theoretical value
                     }
                     else
                     {
-                        datatemp = (CalibrateU12AdcValue(datatemp, 0, 3, 1) * 1.988);
+                        datatemp = (CalibrateU12AdcValue(datatemp, 0, 3, 1) * 2.0); //switch to 2.0 to match the theoretical value
                     }
 
                     if (datatemp < 3400 && datatemp > 3000)
@@ -4178,33 +4368,39 @@ namespace ShimmerAPI
 
                 if (((EnabledSensors & (int)SensorBitmapShimmer3.SENSOR_BMP180_PRESSURE) > 0))
                 {
-                    double[] bmpX80caldata = new double[2];
+                    //Stays null for no sensor fitted, an unrecognised sensor ID or a sensor this hardware does not carry (SD log), whose channels are output uncalibrated
+                    double[] bmpX80caldata = null;
                     int iUP = getSignalIndex(Shimmer3Configuration.SignalNames.PRESSURE);
                     int iUT = getSignalIndex(Shimmer3Configuration.SignalNames.TEMPERATURE);
                     double UP;
                     double UT;
+                    int pressureSensor = GetPressureSensorInUse();
 
-                    if (isShimmer3withUpdatedSensors())
+                    if (pressureSensor == PRESSURE_SENSOR_BMP390 || pressureSensor == PRESSURE_SENSOR_BMP581)
                     {
-                        if (HardwareVersion == (int)ShimmerBluetooth.ShimmerVersion.SHIMMER3R)
+                        //CA-124
+                        UT = (double)newPacket[iUT];
+                        UP = (double)newPacket[iUP];
+                        double[] datatemp = new double[2] { newPacket[iUP], newPacket[iUT] };
+                        if (pressureSensor == PRESSURE_SENSOR_BMP581)
                         {
-                            //CA-124
-                            UT = (double)newPacket[iUT];
-                            UP = (double)newPacket[iUP];
-                            double[] datatemp = new double[2] { newPacket[iUP], newPacket[iUT] };
-                            bmpX80caldata = CalibratePressure390SensorData(UP, UT);
+                            bmpX80caldata = CalibratePressure581SensorData(UP, UT);
                         }
                         else
                         {
-                            UT = (double)newPacket[iUT];
-                            UP = (double)newPacket[iUP];
-                            UT = UT * Math.Pow(2, 4);
-                            UP = UP / Math.Pow(2, 4);
-                            double[] datatemp = new double[2] { newPacket[iUP], newPacket[iUT] };
-                            bmpX80caldata = CalibratePressure280SensorData(UP, UT);
+                            bmpX80caldata = CalibratePressure390SensorData(UP, UT);
                         }
                     }
-                    else
+                    else if (pressureSensor == PRESSURE_SENSOR_BMP280)
+                    {
+                        UT = (double)newPacket[iUT];
+                        UP = (double)newPacket[iUP];
+                        UT = UT * Math.Pow(2, 4);
+                        UP = UP / Math.Pow(2, 4);
+                        double[] datatemp = new double[2] { newPacket[iUP], newPacket[iUT] };
+                        bmpX80caldata = CalibratePressure280SensorData(UP, UT);
+                    }
+                    else if (pressureSensor == PRESSURE_SENSOR_BMP180)
                     {
                         UT = (double)newPacket[iUT];
                         UP = (double)newPacket[iUP];
@@ -4214,9 +4410,15 @@ namespace ShimmerAPI
                     }
 
                     objectCluster.Add(Shimmer3Configuration.SignalNames.PRESSURE, ShimmerConfiguration.SignalFormats.RAW, ShimmerConfiguration.SignalUnits.NoUnits, newPacket[iUP]);
-                    objectCluster.Add(Shimmer3Configuration.SignalNames.PRESSURE, ShimmerConfiguration.SignalFormats.CAL, ShimmerConfiguration.SignalUnits.KiloPascal, bmpX80caldata[0] / 1000);
+                    if (bmpX80caldata != null)
+                    {
+                        objectCluster.Add(Shimmer3Configuration.SignalNames.PRESSURE, ShimmerConfiguration.SignalFormats.CAL, ShimmerConfiguration.SignalUnits.KiloPascal, bmpX80caldata[0] / 1000);
+                    }
                     objectCluster.Add(Shimmer3Configuration.SignalNames.TEMPERATURE, ShimmerConfiguration.SignalFormats.RAW, ShimmerConfiguration.SignalUnits.NoUnits, newPacket[iUT]);
-                    objectCluster.Add(Shimmer3Configuration.SignalNames.TEMPERATURE, ShimmerConfiguration.SignalFormats.CAL, ShimmerConfiguration.SignalUnits.Celcius, bmpX80caldata[1]);
+                    if (bmpX80caldata != null)
+                    {
+                        objectCluster.Add(Shimmer3Configuration.SignalNames.TEMPERATURE, ShimmerConfiguration.SignalFormats.CAL, ShimmerConfiguration.SignalUnits.Celcius, bmpX80caldata[1]);
+                    }
                 }
                 if (((EnabledSensors & (int)SensorBitmapShimmer3.SENSOR_GSR) > 0))
                 {
@@ -4247,7 +4449,7 @@ namespace ShimmerAPI
                         //Changed to new GSR algorithm using non inverting amp
                         //p1 = 0.0373;
                         //p2 = -24.9915;
-                        gsrResistanceKOhms = CalibrateGsrDataToResistanceFromAmplifierEq(datatemp, 0);
+                        gsrResistanceKOhms = CalibrateGsrDataToResistanceWithOpenCircuitLimit(datatemp, 0);
                     }
                     else if (GSRRange == 1 || newGSRRange == 1)
                     {
@@ -4256,7 +4458,7 @@ namespace ShimmerAPI
                         //Changed to new GSR algorithm using non inverting amp
                         //p1 = 0.0054;
                         //p2 = -3.5194;
-                        gsrResistanceKOhms = CalibrateGsrDataToResistanceFromAmplifierEq(datatemp, 1);
+                        gsrResistanceKOhms = CalibrateGsrDataToResistanceWithOpenCircuitLimit(datatemp, 1);
                     }
                     else if (GSRRange == 2 || newGSRRange == 2)
                     {
@@ -4265,7 +4467,7 @@ namespace ShimmerAPI
                         //Changed to new GSR algorithm using non inverting amp
                         //p1 = 0.0015;
                         //p2 = -1.0163;
-                        gsrResistanceKOhms = CalibrateGsrDataToResistanceFromAmplifierEq(datatemp, 2);
+                        gsrResistanceKOhms = CalibrateGsrDataToResistanceWithOpenCircuitLimit(datatemp, 2);
                     }
                     else if (GSRRange == 3 || newGSRRange == 3)
                     {
@@ -4274,11 +4476,7 @@ namespace ShimmerAPI
                         //Changed to new GSR algorithm using non inverting amp
                         //p1 = 4.5580e-04;
                         //p2 = -0.3014;
-                        if (datatemp < GSR_UNCAL_LIMIT_RANGE3)
-                        {
-                            datatemp = GSR_UNCAL_LIMIT_RANGE3;
-                        }
-                        gsrResistanceKOhms = CalibrateGsrDataToResistanceFromAmplifierEq(datatemp, 3);
+                        gsrResistanceKOhms = CalibrateGsrDataToResistanceWithOpenCircuitLimit(datatemp, 3);
                     }
                     //Changed to new GSR algorithm using non inverting amp
                     //datatemp = CalibrateGsrData(datatemp, p1, p2);
@@ -4612,29 +4810,25 @@ namespace ShimmerAPI
                         // the polynomial function used for calibration has been deprecated, it is replaced with a linear function
                         //p1 = 0.0373;
                         //p2 = -24.9915;
-                        gsrResistanceKOhms = CalibrateGsrDataToResistanceFromAmplifierEq(datatemp, 0);
+                        gsrResistanceKOhms = CalibrateGsrDataToResistanceWithOpenCircuitLimit(datatemp, 0);
                     }
                     else if (GSRRange == 1 || newGSRRange == 1)
                     {
                         //p1 = 0.0054;
                         //p2 = -3.5194;
-                        gsrResistanceKOhms = CalibrateGsrDataToResistanceFromAmplifierEq(datatemp, 1);
+                        gsrResistanceKOhms = CalibrateGsrDataToResistanceWithOpenCircuitLimit(datatemp, 1);
                     }
                     else if (GSRRange == 2 || newGSRRange == 2)
                     {
                         //p1 = 0.0015;
                         //p2 = -1.0163;
-                        gsrResistanceKOhms = CalibrateGsrDataToResistanceFromAmplifierEq(datatemp, 2);
+                        gsrResistanceKOhms = CalibrateGsrDataToResistanceWithOpenCircuitLimit(datatemp, 2);
                     }
                     else if (GSRRange == 3 || newGSRRange == 3)
                     {
                         //p1 = 4.5580e-04;
                         //p2 = -0.3014;
-                        if (datatemp < GSR_UNCAL_LIMIT_RANGE3)
-                        {
-                            datatemp = GSR_UNCAL_LIMIT_RANGE3;
-                        }
-                        gsrResistanceKOhms = CalibrateGsrDataToResistanceFromAmplifierEq(datatemp, 3);
+                        gsrResistanceKOhms = CalibrateGsrDataToResistanceWithOpenCircuitLimit(datatemp, 3);
                     }
                     //datatemp = CalibrateGsrData(datatemp, p1, p2);
                     gsrResistanceKOhms = NudgeGsrResistance(gsrResistanceKOhms, GSRRange);
@@ -5856,7 +6050,10 @@ namespace ShimmerAPI
             }
         }
         /// <summary>
-        /// 
+        /// Whether this API will turn the Bluetooth CRC on for the connected firmware. False on firmware
+        /// without SET_CRC_COMMAND, and on Shimmer3R LogAndStream before 1.0.11, which turns the CRC off
+        /// by itself whenever sensing stops (see KeepsCRCWhenSensingStops). True on Shimmer3R LogAndStream
+        /// 1.0.24 to 1.0.49, where only a 2-byte CRC is refused (see TwoByteCRCOverrunsStatusPush).
         /// </summary>
         /// <returns></returns>
         /// <exception cref="Exception">If device is not connected/streaming</exception>
@@ -5866,7 +6063,7 @@ namespace ShimmerAPI
                 GetState() == SHIMMER_STATE_STREAMING ||
                 GetState() == SHIMMER_STATE_CONNECTING)
             {
-                if (GetCompatibilityCode() >= 8)
+                if (GetCompatibilityCode() >= 8 && KeepsCRCWhenSensingStops())
                 {
                     return true;
                 }
@@ -5876,6 +6073,91 @@ namespace ShimmerAPI
                 throw new Exception("Device needs to be connected, connecting or streaming");
             }
             return false;
+        }
+
+        /// <summary>
+        /// False when the firmware turns the Bluetooth CRC off by itself whenever sensing stops, as the
+        /// Shimmer3R LogAndStream releases of November and December 2024, 0.0.2 to 1.0.10, do (DEV-976).
+        /// <para>
+        /// S4Sens_stopSensing clears it once every active mode has been told to stop (shimmer3r-firmware
+        /// S3R_Production/S4_App/s4_sensing.c:354 at LogAndStream_Shimmer3R_v1.00.010): on STOP_SDBT, on
+        /// STOP_STREAMING while only streaming, and on STOP_LOGGING, the user button or docking while
+        /// only logging. Nothing tells the host. The stop's own ACK still carries the CRC, but every
+        /// reply after it arrives without one, so this API would go on taking CRC bytes out of replies
+        /// and streams that no longer have them. shimmer3r-firmware c8016de3 removed the clears, and
+        /// LogAndStream 1.0.11 is the first release that keeps the CRC.
+        /// </para>
+        /// <para>
+        /// Shimmer3 and Shimmer3R LogAndStream version numbers overlap, so the hardware version decides,
+        /// and no Shimmer3 firmware clears the CRC at a stop. The hardware is taken as the device reports
+        /// it, which lets one build through: LogAndStream_Shimmer3R_v1.00.008, a side build for older
+        /// Consensys, reports a Shimmer3 and cannot be told from a Shimmer3 on LogAndStream 1.0.8. The
+        /// web SDK refuses the same releases (shimmer-web-sdk keepsLinkCrcWhenSensingStops).
+        /// </para>
+        /// </summary>
+        public bool KeepsCRCWhenSensingStops()
+        {
+            if (HardwareVersion == (int)ShimmerVersion.SHIMMER3R)
+            {
+                if (FirmwareIdentifier == ShimmerBluetooth.FW_IDENTIFIER_LOGANDSTREAM)   //LogAndStream
+                {
+                    return compareVersions(1, 0, 11);
+                }
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// Why a CRC is refused on firmware that turns it off whenever sensing stops, for the exception
+        /// WriteCRCMode throws and the warning a constructor's CRC mode gets.
+        /// </summary>
+        protected String GetCRCRefusalReason()
+        {
+            return "Shimmer3R " + FirmwareVersionFullName + " turns it off by itself whenever streaming or logging stops, "
+                + "without telling the host, so every reply after a stop would be misread. "
+                + "Update to LogAndStream 1.0.11 or later to use a CRC.";
+        }
+
+        /// <summary>
+        /// True when a 2-byte Bluetooth CRC overruns the status push the firmware sends by itself, and the
+        /// sensor hardfaults: Shimmer3R LogAndStream 1.0.24 to 1.0.49 (DEV-621, fixed in 1.0.50).
+        /// WriteCRCMode refuses TWO_BYTE there, and a constructor's TWO_BYTE is turned on as ONE_BYTE
+        /// (DEV-1141).
+        /// <para>
+        /// Those releases build the push in a six-byte buffer, uint8_t selfcmd[6] in
+        /// ShimBt_instreamStatusRespSend (log-and-stream-common Comms/shimmer_bt_uart.c:2262 at f39be8c1f,
+        /// which 1.0.49 pins): the ACK prefix, 0x8A 0x71, the status and the CRC. From 1.0.24 the status
+        /// is two bytes (IsTwoByteStatusResponseSupported), so a 2-byte CRC makes seven, and the seventh
+        /// is written past the end of the buffer. Every release from 1.0.50 pins log-and-stream-common
+        /// merge 4fb8696, which sizes the buffer for it. A 1-byte CRC fits, as does a 2-byte one wherever
+        /// the status is one byte: Shimmer3R 1.0.23 and earlier, and every Shimmer3.
+        /// </para>
+        /// <para>
+        /// The firmware pushes on docking and undocking, and when the user button, a trial-duration
+        /// expiry or a low battery starts or stops sensing. The host's own starts and stops do not push,
+        /// so the hardfault can come at any point after the CRC goes on, mid-stream included.
+        /// </para>
+        /// <para>
+        /// Turning the push's ACK prefix off first (SET_INSTREAM_RESPONSE_ACK_PREFIX_STATE, 0xA3) also
+        /// makes it fit, and the web SDK keeps a 2-byte CRC that way (shimmer-web-sdk
+        /// twoByteCrcOverrunsStatusPush). This API does not, because while streaming ReadData only finds
+        /// a status push behind its ACK prefix: one without it would be dropped, along with any stop it
+        /// reports.
+        /// </para>
+        /// </summary>
+        public bool TwoByteCRCOverrunsStatusPush()
+        {
+            return IsTwoByteStatusResponseSupported() && !compareVersions(1, 0, 50);
+        }
+
+        /// <summary>
+        /// Why a 2-byte CRC is refused where it overruns the status push, for the exception WriteCRCMode
+        /// throws and the warning a constructor's TWO_BYTE gets.
+        /// </summary>
+        protected String GetTwoByteCRCRefusalReason()
+        {
+            return "Shimmer3R " + FirmwareVersionFullName + " hardfaults when a status message it sends by itself, "
+                + "on docking or undocking, the user button, a trial-duration expiry or a low battery, carries a 2-byte CRC.";
         }
 
         /// <summary>
@@ -6266,6 +6548,9 @@ namespace ShimmerAPI
         /// </summary>
         public void ReadPressureCalibrationCoefficients()
         {
+            //Forget any sensor ID from an earlier connection, on a Shimmer3 as on a Shimmer3R, so that this device's reply or the board rules decide.
+            //The Java driver does the same whenever the expansion board details change.
+            PressureSensorId = PRESSURE_SENSOR_UNKNOWN;
             if (HardwareVersion == (int)ShimmerVersion.SHIMMER3)
             {
                 if (FirmwareIdentifier == FW_IDENTIFIER_LOGANDSTREAM && CompatibilityCode > 8)
@@ -6291,6 +6576,13 @@ namespace ShimmerAPI
             {
                 WriteBytes(new byte[1] { (byte)PacketTypeShimmer3RSDBT.GET_PRESSURE_CALIBRATION_COEFFICIENTS_COMMAND }, 0, 1);
                 System.Threading.Thread.Sleep(800);
+                //No sensor ID received: LogAndStream v1.01.006 NACKs this command on a BMP581 (a NACK is otherwise ignored by the
+                //read thread) or there was no reply. Fall back to the SR number rule. A late in-band reply still overrides this.
+                if (PressureSensorId == PRESSURE_SENSOR_UNKNOWN)
+                {
+                    PressureSensorId = isShimmer3RwithBmp581() ? PRESSURE_SENSOR_BMP581 : PRESSURE_SENSOR_BMP390;
+                    Debug.WriteLine("No pressure sensor ID received, assuming " + (PressureSensorId == PRESSURE_SENSOR_BMP581 ? "BMP581" : "BMP390") + " from the SR number");
+                }
             }
         }
 
@@ -6346,13 +6638,47 @@ namespace ShimmerAPI
             return BluetoothCRCMode;
         }
 
+        /// <summary>
+        /// Turns the Bluetooth CRC on or off. Turning it on is refused, and nothing is sent, wherever
+        /// IsCRCSupported is false, and a 2-byte CRC is refused the same way wherever
+        /// TwoByteCRCOverrunsStatusPush is true. Turning it off is never refused on firmware that has the
+        /// command, including Shimmer3R LogAndStream before 1.0.11.
+        /// <para>
+        /// The firmware switches its CRC before it ACKs the command, so the read thread switches at
+        /// that ACK. If no ACK arrives within the 300 ms wait, the mode is applied at the end of it.
+        /// </para>
+        /// </summary>
+        /// <exception cref="Exception">If the device is not connected, the firmware has no SET_CRC_COMMAND,
+        /// a CRC is asked of firmware that turns it off whenever sensing stops, or a 2-byte CRC is asked
+        /// of firmware whose status push it overruns</exception>
         public void WriteCRCMode(BTCRCMode mode)
         {
-            if (IsCRCSupported())
+            // Off goes wherever the command exists: it can never leave this API expecting a CRC
+            if (IsCRCSupported() || (mode == BTCRCMode.OFF && GetCompatibilityCode() >= 8))
             {
-                WriteBytes(new byte[2] { (byte)InstructionsSet.SetCrcCommand, ((byte)mode) }, 0, 2);
-                System.Threading.Thread.Sleep(300);
+                // Refused before the wait flag is set, so a refused call never leaves it set
+                if (mode == BTCRCMode.TWO_BYTE && TwoByteCRCOverrunsStatusPush())
+                {
+                    throw new Exception("Cannot turn a 2-byte Bluetooth CRC on: " + GetTwoByteCRCRefusalReason()
+                        + " Use a 1-byte CRC, or update to LogAndStream 1.0.50 or later.");
+                }
+                mCRCModeAfterACK = mode;
+                mWaitingForCRCModeACK = true;
+                try
+                {
+                    WriteBytes(new byte[2] { (byte)InstructionsSet.SetCrcCommand, ((byte)mode) }, 0, 2);
+                    System.Threading.Thread.Sleep(300);
+                }
+                finally
+                {
+                    // Left set, it would take the next reply's ACK for this one
+                    mWaitingForCRCModeACK = false;
+                }
                 BluetoothCRCMode = mode;
+            }
+            else if (!KeepsCRCWhenSensingStops())
+            {
+                throw new Exception("Cannot turn the Bluetooth CRC on: " + GetCRCRefusalReason());
             }
             else
             {
@@ -6541,8 +6867,9 @@ namespace ShimmerAPI
         /// <summary>
         /// This is to set the pressure resolution of the BMP180 Pressure sensor on the Shimmer3. There are four different settings 0,1,2,3 with 0 being the lowest resolution and 3 the highest.
         /// This is to set the pressure resolution of the BMP390 Pressure sensor on the Shimmer3R. There are four different settings 0,1,2,3,4,5 with 0 being the lowest resolution and 5 the highest.
+        /// On a Shimmer3R with a BMP581 (see isBmp581InUse()) there are eight settings, 0-7. The firmware replaces an out of range setting with 0.
         /// </summary>
-        /// <param name="setting">A value between 0 and 3, 3 being highest resolution and 0 lowest for Shimmer3, and 0-5 for Shimmer3R</param>
+        /// <param name="setting">A value between 0 and 3, 3 being highest resolution and 0 lowest for Shimmer3, 0-5 for Shimmer3R (BMP390) and 0-7 for Shimmer3R (BMP581)</param>
         public void WritePressureResolution(int setting)
         {
             if (HardwareVersion == (int)ShimmerVersion.SHIMMER3 || HardwareVersion == (int)ShimmerVersion.SHIMMER3R)
@@ -7494,6 +7821,30 @@ namespace ShimmerAPI
             return caldata;
         }
 
+        /// <summary>
+        /// The BMP581 outputs compensated data, so there are no calibration coefficients (BST-BMP581-DS004):
+        /// pressure (Pa) = unsigned 24-bit / 64, temperature (degC) = signed 24-bit / 65536.
+        /// The temperature channel is parsed as u24, so it is sign extended here, otherwise sub-zero readings decode as ~255 degC (DEV-1102).
+        /// </summary>
+        /// <returns>{pressure in Pa, temperature in degC}</returns>
+        protected double[] CalibratePressure581SensorData(double UP, double UT)
+        {
+            double[] caldata = new double[2];
+            caldata[0] = UP / 64.0;
+            caldata[1] = SignExtend24(UT) / 65536.0;
+            return caldata;
+        }
+
+        /// <summary>
+        /// Reads a 24-bit field as two's complement. Masks to 24 bits first, so a value that is already signed passes through unchanged.
+        /// </summary>
+        /// <returns>The signed value, -2^23 to 2^23-1</returns>
+        public static double SignExtend24(double raw)
+        {
+            long bits = ((long)raw) & 0xFFFFFFL;
+            return (bits & 0x800000L) != 0 ? bits - 0x1000000L : bits;
+        }
+
         // Method to compute power, equivalent to pow_bmp3 function in C
         private static double PowBmp3(double baseValue, int exponent)
         {
@@ -7664,6 +8015,35 @@ namespace ShimmerAPI
             }
             double rSource = rFeedback / ((volts / 0.5) - 1.0);
             return rSource;
+        }
+
+        /// <summary>
+        /// CalibrateGsrDataToResistanceFromAmplifierEq, reading an open circuit as open on every range
+        /// (DEV-1070).
+        /// <para>
+        /// The amplifier equation has no positive solution at or below the amplifier's 0.5 V reference:
+        /// no skin resistance can pull the output under it, so a code there means the electrodes are
+        /// open. Range 3 has long raised such a code to GSR_UNCAL_LIMIT_RANGE3, the first code above the
+        /// reference, so that an open circuit decodes as thousands of MOhm. Ranges 0-2 did not, and in
+        /// auto-range they see these codes too. When the electrodes come off, the device climbs one range
+        /// at a time and repeats the sample that triggered each switch through the 80 ms settling time,
+        /// tagged with the range it was measured on. On ranges 0-2 the equation gave those samples a
+        /// negative resistance and conductance.
+        /// </para>
+        /// <para>
+        /// So a code below the limit decodes as range 3 at the limit, whatever range it was measured on,
+        /// and an open circuit reads the same on every range as the settled range 3 does. Codes at or
+        /// above the limit decode on their own range, as before. The Java driver and the Verisense
+        /// decoders apply the same rule.
+        /// </para>
+        /// </summary>
+        protected double CalibrateGsrDataToResistanceWithOpenCircuitLimit(double gsrUncalibratedData, int range)
+        {
+            if (gsrUncalibratedData < GSR_UNCAL_LIMIT_RANGE3)
+            {
+                return CalibrateGsrDataToResistanceFromAmplifierEq(GSR_UNCAL_LIMIT_RANGE3, 3);
+            }
+            return CalibrateGsrDataToResistanceFromAmplifierEq(gsrUncalibratedData, range);
         }
 
         protected void ReadMemCommand(int command, int address, int size)
