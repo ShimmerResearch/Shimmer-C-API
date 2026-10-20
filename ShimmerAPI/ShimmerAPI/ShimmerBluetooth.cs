@@ -302,6 +302,11 @@ namespace ShimmerAPI
 
         protected BTCRCMode BluetoothCRCMode = BTCRCMode.OFF;
         protected BTCRCMode CRCModeToSetup = BTCRCMode.OFF;
+        /// <summary>
+        /// The CRC that follows a bare ACK, the whole reply to a SET command: F4 65, or F4 in one-byte
+        /// mode. No response code is 0xF4, in any Shimmer3 or Shimmer3R firmware.
+        /// </summary>
+        private static readonly byte[] BareAckCRC = ShimmerUartCrcCalc(new byte[] { (byte)PacketTypeShimmer2.ACK_COMMAND }, 1);
 
         public enum ShimmerIdentifier
         {
@@ -1274,13 +1279,20 @@ namespace ShimmerAPI
             FlushInputConnection();
             KeepObjectCluster = null;
             UnalignedBytesReceived = new List<Byte>();
+            // A response code read straight after an ACK, which is the next byte to handle (see the ACK case)
+            int byteAfterAck = -1;
 
             while (!StopReading)
             {
                 try
                 {
                     byte b;
-                    if (UnalignedBytesReceived.Count() > 0)
+                    if (byteAfterAck >= 0)
+                    {
+                        b = (byte)byteAfterAck;
+                        byteAfterAck = -1;
+                    }
+                    else if (UnalignedBytesReceived.Count() > 0)
                     {
                         //Debug.WriteLine("Reuse Unaligned Bytes");
                         b = UnalignedBytesReceived[0];
@@ -1609,6 +1621,29 @@ namespace ShimmerAPI
                                         }
                                     }
                                     StreamingACKReceived = true;
+                                }
+                                else if (BluetoothCRCMode != BTCRCMode.OFF)
+                                {
+                                    // A reply is the ACK, any response, then one CRC over both, and the drop
+                                    // below takes the CRC after a response. A bare ACK, the reply to a SET
+                                    // command, has no response, so its CRC comes straight after it. Read as a
+                                    // response code, its F4 took the first byte of the next reply with it,
+                                    // even the ACK to START_STREAMING_COMMAND. No response code is F4, so the
+                                    // next byte tells a bare ACK from a response.
+                                    byte next = (byte)ReadByte();
+                                    if (next == BareAckCRC[0])
+                                    {
+                                        for (int k = 1; k < (int)BluetoothCRCMode; k++)
+                                        {
+                                            ReadByte();
+                                        }
+                                    }
+                                    else
+                                    {
+                                        // Kept out of UnalignedBytesReceived, which StartStreaming replaces
+                                        // from the caller's thread
+                                        byteAfterAck = next;
+                                    }
                                 }
                                 break;
                             case (byte)PacketTypeShimmer2.ACCEL_CALIBRATION_RESPONSE:
