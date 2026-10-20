@@ -105,6 +105,11 @@ namespace ShimmerAPI
         /// </summary>
         protected volatile bool mWaitingForCRCModeACK = false;
         protected BTCRCMode mCRCModeAfterACK = BTCRCMode.OFF;
+        /// <summary>
+        /// Set when the firmware NACKs the SET_CRC_COMMAND that WriteCRCMode is waiting on. It refuses
+        /// before it switches, so the link keeps the old mode and WriteCRCMode must not apply the new one.
+        /// </summary>
+        protected volatile bool mCRCModeRefused = false;
         private int StreamTimeOutCount = 0;
         protected bool StreamingACKReceived = false;
         protected String DeviceName;
@@ -1290,21 +1295,20 @@ namespace ShimmerAPI
         /// calibration write, and several commands it accepts but never implemented.
         ///
         /// Override to surface the refusal to the application; the notification
-        /// raised below is the default.
+        /// raised below is the default. ReadData drops the NACK's link CRC before
+        /// or after calling this, so an override that does not call it cannot
+        /// leave the CRC in the stream.
         /// </remarks>
         protected virtual void ProcessNackFromCommand()
         {
             System.Console.WriteLine("NACK Received - the Shimmer refused the command");
 
-            /* The NACK is the whole response packet, so the CRC bytes the firmware
-             * appended to it are still in the stream and would otherwise be read as
-             * the next packet header. */
-            if (BluetoothCRCMode != BTCRCMode.OFF)
+            /* A refused SET_CRC_COMMAND: the firmware NACKs before it switches, so the NACK came in
+             * the old mode and the link keeps it. Stop WriteCRCMode applying the new one. */
+            if (mWaitingForCRCModeACK)
             {
-                for (int k = 0; k < (int)BluetoothCRCMode; k++)
-                {
-                    ReadByte();
-                }
+                mCRCModeRefused = true;
+                mWaitingForCRCModeACK = false;
             }
 
             /* A refused START_STREAMING never reaches SHIMMER_STATE_STREAMING, so
@@ -1441,6 +1445,12 @@ namespace ShimmerAPI
                                 }
                                 break;
                             case (byte)PacketTypeShimmer2.NACK_COMMAND:
+                                // A NACK is a whole reply, framed with the link CRC, and nothing else in
+                                // the streaming branch drops it
+                                for (int k = 0; k < (int)BluetoothCRCMode; k++)
+                                {
+                                    ReadByte();
+                                }
                                 ProcessNackFromCommand();
                                 break;
                             case (byte)PacketTypeShimmer2.ACK_COMMAND:
@@ -1643,6 +1653,8 @@ namespace ShimmerAPI
                                 SetInternalExpPower(ReadByte());
                                 break;
                             case (byte)PacketTypeShimmer2.NACK_COMMAND:
+                                // Its link CRC is dropped after the switch, as for every reply that does
+                                // not start with an ACK
                                 ProcessNackFromCommand();
                                 break;
                             case (byte)PacketTypeShimmer2.ACK_COMMAND:
@@ -6646,6 +6658,8 @@ namespace ShimmerAPI
         /// <para>
         /// The firmware switches its CRC before it ACKs the command, so the read thread switches at
         /// that ACK. If no ACK arrives within the 300 ms wait, the mode is applied at the end of it.
+        /// If the firmware refuses the command (NACK), the old mode is kept, and ProcessNackFromCommand
+        /// reports the refusal; no exception is thrown, since this also runs inside Connect().
         /// </para>
         /// </summary>
         /// <exception cref="Exception">If the device is not connected, the firmware has no SET_CRC_COMMAND,
@@ -6663,6 +6677,7 @@ namespace ShimmerAPI
                         + " Use a 1-byte CRC, or update to LogAndStream 1.0.50 or later.");
                 }
                 mCRCModeAfterACK = mode;
+                mCRCModeRefused = false;
                 mWaitingForCRCModeACK = true;
                 try
                 {
@@ -6674,7 +6689,11 @@ namespace ShimmerAPI
                     // Left set, it would take the next reply's ACK for this one
                     mWaitingForCRCModeACK = false;
                 }
-                BluetoothCRCMode = mode;
+                // A NACKed switch never happened on the device, so the old mode stays
+                if (!mCRCModeRefused)
+                {
+                    BluetoothCRCMode = mode;
+                }
             }
             else if (!KeepsCRCWhenSensingStops())
             {

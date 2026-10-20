@@ -228,15 +228,22 @@ namespace ShimmerBluetoothTests
     /// builds the ACK, and frames every reply in its own CRC mode. The API's own read loop parses the
     /// replies, and a read with nothing to read times out after ReadTimeout, as a serial port's does.
     /// It answers GET_SAMPLING_RATE_COMMAND with the sampling rate and every other command with an ACK,
-    /// and after START_STREAMING_COMMAND it sends a data packet every 20 ms.
+    /// and after START_STREAMING_COMMAND it sends a data packet every 20 ms. A command in Refuse is
+    /// answered with a NACK instead, and not acted on.
     /// </summary>
     class CrcLinkDevice : CrcFirmwareDevice
     {
         const byte Ack = (byte)PacketTypeShimmer2.ACK_COMMAND;
+        const byte Nack = (byte)PacketTypeShimmer2.NACK_COMMAND;
         const byte SetCrcCommand = 0x8B;
         const int DataPacketSize = 10;
 
         public BTCRCMode DeviceCRCMode;
+        /// <summary>
+        /// Commands answered with a NACK, as the firmware's sendNack gates do. It refuses before it acts,
+        /// so a refused SET_CRC_COMMAND leaves the mode as it was and the NACK is framed in that mode.
+        /// </summary>
+        public readonly HashSet<byte> Refuse = new HashSet<byte>();
         public int SamplingRateTicks = 640;
         /// <summary>Keeps replies back until ReleaseHeldReplies, as a slow link would.</summary>
         public bool HoldReplies;
@@ -267,13 +274,19 @@ namespace ShimmerBluetoothTests
             ReadThread.Start();
         }
 
-        public void StopReadingAndWait()
+        /// <summary>Stops sending data packets and waits until the last one is sent.</summary>
+        public void StopSendingPackets()
         {
             streaming = false;
             if (streamThread != null)
             {
                 streamThread.Join();
             }
+        }
+
+        public void StopReadingAndWait()
+        {
+            StopSendingPackets();
             StopReading = true;
             ReadThread.Join(2 * ReadTimeout);
         }
@@ -309,6 +322,11 @@ namespace ShimmerBluetoothTests
         protected override void WriteBytes(byte[] b, int index, int length)
         {
             base.WriteBytes(b, index, length);
+            if (Refuse.Contains(b[index]))
+            {
+                Send(new List<byte> { Nack });
+                return;
+            }
             List<byte> reply = new List<byte> { Ack };
             if (b[index] == SetCrcCommand)
             {
