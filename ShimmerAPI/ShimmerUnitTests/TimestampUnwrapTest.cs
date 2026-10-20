@@ -194,5 +194,51 @@ namespace ShimmerBluetoothTests
             Assert.AreEqual((samples - 1) * PeriodTicks, u.LastUnwrapped - startTicks,
                 "span is exactly the samples that were taken");
         }
+
+        /// <summary>
+        /// Runs ShimmerDevice's own unwrap state, as a stream does: CalibrateTimeStamp
+        /// per sample and ResetTimeStampUnwrap at each stream start.
+        /// </summary>
+        private class UnwrapDevice : ShimmerDevice
+        {
+            public UnwrapDevice(double samplingRateHz)
+            {
+                HardwareVersion = (int)ShimmerVersion.SHIMMER3;
+                TimeStampPacketRawMaxValue = Max3Byte;
+                SamplingRate = samplingRateHz;
+            }
+
+            public double Feed(double rawTicks)
+            {
+                CalibrateTimeStamp(rawTicks);
+                return LastReceivedTimeStamp;
+            }
+
+            public void StartStream()
+            {
+                ResetTimeStampUnwrap();
+            }
+        }
+
+        /// <summary>
+        /// A stream start forgets the previous stream, so the new one's first sample
+        /// passes through even when it sits just below the counter's top. Measured
+        /// against the old stream's reset state instead, it reads as a packet reordered
+        /// across the origin, and the whole stream lands 512 seconds early. That is what
+        /// ShimmerSDBT32Feet did, clearing the unwrapped value and the cycle but not
+        /// HasPreviousTimeStamp; every stream start now resets through one method.
+        /// </summary>
+        [TestMethod]
+        public void TestAStreamStartLetsTheFirstSampleThrough()
+        {
+            var device = new UnwrapDevice(51.2); // a reorder window of 8 x 640 ticks
+            device.Feed(1000000);
+            device.Feed(1000640);
+
+            device.StartStream();
+            double nearTop = Max3Byte - 100;
+            Assert.AreEqual(nearTop, device.Feed(nearTop), "the new stream's first sample passes through");
+            Assert.AreEqual(nearTop + 640, device.Feed(540), "and the stream wraps forward from it");
+        }
     }
 }

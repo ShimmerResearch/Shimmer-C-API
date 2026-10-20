@@ -87,6 +87,7 @@ namespace ShimmerAPI
         public const int SHIMMER_STATE_NONE = 0;
         public bool mEnableTimeStampAlignmentCheck = false;
         public const int FW_IDENTIFIER_BTSTREAM = 1;
+        public const int FW_IDENTIFIER_SDLOG = 2;
         public const int FW_IDENTIFIER_LOGANDSTREAM = 3;
         public const int FW_IDENTIFIER_SHIMMERECGMD = 16;
 
@@ -5677,11 +5678,7 @@ namespace ShimmerAPI
                 {
                     StreamingACKReceived = false;
                     StreamTimeOutCount = 0;
-                    LastReceivedTimeStamp = 0;
-                    CurrentTimeStampCycle = 0;
-                    //A stream start: the next sample is the first one, and the pair
-                    //above cannot say so on their own.
-                    HasPreviousTimeStamp = false;
+                    ResetTimeStampUnwrap();
                     LastReceivedCalibratedTimeStamp = -1;
                     FirstTimeCalTime = true;
                     FirstSystemTimestamp = true;
@@ -6283,6 +6280,17 @@ namespace ShimmerAPI
                 else if (FirmwareIdentifier == ShimmerBluetooth.FW_IDENTIFIER_SHIMMERECGMD)
                 {
                     CompatibilityCode = 7;
+                }
+                else if (FirmwareIdentifier == ShimmerBluetooth.FW_IDENTIFIER_SDLOG)   //SDLog, met here only in its SD files
+                {
+                    //A 3-byte timestamp from SDLog 0.11.5, as the Java driver's ShimmerVerObject has it. Left at
+                    //0, an SDLog file unwrapped its 3-byte counter against 65536 (DEV-1024). Code 6, the lowest
+                    //with a 3-byte timestamp, rather than Java's 8 from 0.20.1: an SD file needs only the
+                    //timestamp width, and the codes above 6 turn on Bluetooth features
+                    if (compareVersions(0, 11, 5))
+                    {
+                        CompatibilityCode = 6;
+                    }
                 }
             }
             else if (HardwareVersion == (int)ShimmerVersion.SHIMMER2R)
@@ -7700,11 +7708,7 @@ namespace ShimmerAPI
                 {
                     StreamingACKReceived = false;
                     StreamTimeOutCount = 0;
-                    LastReceivedTimeStamp = 0;
-                    CurrentTimeStampCycle = 0;
-                    //A stream start: the next sample is the first one, and the pair
-                    //above cannot say so on their own.
-                    HasPreviousTimeStamp = false;
+                    ResetTimeStampUnwrap();
                     LastReceivedCalibratedTimeStamp = -1;
                     FirstTimeCalTime = true;
                     FirstSystemTimestamp = true;

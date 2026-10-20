@@ -7,7 +7,8 @@ using ShimmerAPI;
 namespace ShimmerBluetoothTests
 {
     /// <summary>
-    /// Builds a Shimmer3 LogAndStream SD file by hand and reads it back through
+    /// Builds a Shimmer3 SD file by hand, as LogAndStream writes it unless a test names
+    /// other firmware, and reads it back through
     /// <see cref="ShimmerSDLog"/>.
     /// <para>
     /// Covers three things that were each independently broken, and which only show
@@ -45,7 +46,10 @@ namespace ShimmerBluetoothTests
         /// <summary>Near the top of the 24-bit range, so the file contains a real wrap.</summary>
         private const long FirstTick = 0xFFF000L;
 
-        private static byte[] BuildHeader(bool syncWhenLogging)
+        /// <summary>Firmware identifier, major, minor and internal, as header bytes 34-39 hold them.</summary>
+        private static readonly int[] LogAndStream_1_01_003 = { ShimmerBluetooth.FW_IDENTIFIER_LOGANDSTREAM, 1, 1, 3 };
+
+        private static byte[] BuildHeader(bool syncWhenLogging, int[] firmware)
         {
             byte[] h = new byte[HeaderSize];
 
@@ -72,11 +76,11 @@ namespace ShimmerBluetoothTests
             h[32] = 1; // trial id
             h[33] = 1; // number of shimmers
 
-            // 34-39: LogAndStream v1.01.003
-            h[34] = 0x00; h[35] = 0x03;
-            h[36] = 0x00; h[37] = 0x01;
-            h[38] = 0x01;
-            h[39] = 0x03;
+            // 34-39: firmware identifier and major (big-endian), minor, internal
+            h[34] = (byte)(firmware[0] >> 8); h[35] = (byte)firmware[0];
+            h[36] = (byte)(firmware[1] >> 8); h[37] = (byte)firmware[1];
+            h[38] = (byte)firmware[2];
+            h[39] = (byte)firmware[3];
 
             // 214-216: expansion board, SR31-6-0
             h[214] = 31; h[215] = 6; h[216] = 0;
@@ -121,6 +125,14 @@ namespace ShimmerBluetoothTests
         private static string BuildFile(bool syncWhenLogging, int[] badRowIndexes,
             System.Collections.Generic.Dictionary<int, long> tickOverrides)
         {
+            return BuildFile(syncWhenLogging, badRowIndexes, tickOverrides, LogAndStream_1_01_003);
+        }
+
+        /// <param name="firmware">the firmware that wrote the file: identifier, major,
+        /// minor, internal</param>
+        private static string BuildFile(bool syncWhenLogging, int[] badRowIndexes,
+            System.Collections.Generic.Dictionary<int, long> tickOverrides, int[] firmware)
+        {
             // The reader takes the last three characters of the path as the SD file
             // number, so give it a name shaped like one the firmware writes.
             string dir = Path.Combine(Path.GetTempPath(), "shimmer_sdlog_" + Guid.NewGuid().ToString("N"));
@@ -131,7 +143,7 @@ namespace ShimmerBluetoothTests
 
             using (var outStream = new FileStream(path, FileMode.Create, FileAccess.Write))
             {
-                byte[] header = BuildHeader(syncWhenLogging);
+                byte[] header = BuildHeader(syncWhenLogging, firmware);
                 outStream.Write(header, 0, header.Length);
 
                 for (int i = 0; i < RowCount; i++)
@@ -314,6 +326,37 @@ namespace ShimmerBluetoothTests
             finally
             {
                 DeleteFile(path);
+            }
+        }
+
+        /// <summary>
+        /// The same file, written by SDLog, the logging-only firmware. Its counter is 3
+        /// bytes from 0.11.5 as well, but the compatibility code had no SDLog branch,
+        /// so the file kept the 2-byte modulo, and this one read as over nine hours
+        /// long instead of six seconds.
+        /// </summary>
+        [TestMethod]
+        public void TestAnSdLogFirmwareRecordingIsPositiveAcrossARollOver()
+        {
+            int sdLog = ShimmerBluetooth.FW_IDENTIFIER_SDLOG;
+            foreach (int[] firmware in new[] { new[] { sdLog, 0, 11, 5 }, new[] { sdLog, 0, 20, 1 } })
+            {
+                string version = "SDLog v" + firmware[1] + "." + firmware[2] + "." + firmware[3];
+                string path = BuildFile(false, new int[0], null, firmware);
+                try
+                {
+                    var sdLogFile = new ShimmerSDLog(path);
+                    List<double> timestamps = ReadAllTimestamps(sdLogFile);
+
+                    Assert.AreEqual(RowCount, timestamps.Count, version);
+                    double spanMs = timestamps[timestamps.Count - 1] - timestamps[0];
+                    Assert.AreEqual(RowCount * PeriodTicks / TicksPerSecond, spanMs / 1000.0, 0.01,
+                        version + ": the recording lasts as long as the samples it holds");
+                }
+                finally
+                {
+                    DeleteFile(path);
+                }
             }
         }
 

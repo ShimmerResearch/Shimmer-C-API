@@ -73,6 +73,21 @@ namespace ShimmerAPI
             return TimestampUnwrap.ReorderWindowTicks(SamplingRate, TimeStampPacketRawMaxValue);
         }
 
+        /// <summary>
+        /// Resets the timestamp unwrap at a stream start, so that the stream's first
+        /// sample is taken as a first sample. Every stream start calls this rather than
+        /// clearing the fields itself: a copy that cleared only LastReceivedTimeStamp and
+        /// CurrentTimeStampCycle left HasPreviousTimeStamp set, and a stream whose first
+        /// sample sat within the reorder window below the counter's top was then read as
+        /// a packet reordered across the origin and placed a whole modulo early.
+        /// </summary>
+        protected void ResetTimeStampUnwrap()
+        {
+            LastReceivedTimeStamp = 0;
+            CurrentTimeStampCycle = 0;
+            HasPreviousTimeStamp = false;
+        }
+
         protected double CalibrateTimeStamp(double timeStamp)
         {
             //first convert to continuous time stamp
