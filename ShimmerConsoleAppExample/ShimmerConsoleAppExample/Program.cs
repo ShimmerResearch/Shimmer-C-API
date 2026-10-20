@@ -72,6 +72,7 @@ namespace ShimmerConsoleAppExample
                     }
                     break;
                 case (int)ShimmerBluetooth.ShimmerIdentifier.MSG_IDENTIFIER_NOTIFICATION_MESSAGE:
+                    System.Console.WriteLine(eventArgs.getObject());
                     break;
                 case (int)ShimmerBluetooth.ShimmerIdentifier.MSG_IDENTIFIER_DATA_PACKET:
                     ObjectCluster objectCluster = (ObjectCluster)eventArgs.getObject();
