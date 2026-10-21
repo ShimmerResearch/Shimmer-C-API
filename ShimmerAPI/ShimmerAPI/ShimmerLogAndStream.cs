@@ -742,6 +742,11 @@ namespace ShimmerAPI
             //worker.ReportProgress(35, status_text);
             ReadAccelSamplingRate();
 
+            status_text = "Acquiring derived channel settings...";
+            newEventArgs = new CustomEventArgs((int)ShimmerIdentifier.MSG_IDENTIFIER_NOTIFICATION_MESSAGE, (object)status_text);
+            OnNewEvent(newEventArgs);
+            ReadDerivedChannelBytes();
+
             status_text = "Acquiring Calibration settings...";
             //PControlForm.status_text = "Acquiring Calibration settings...";
             //worker.ReportProgress(40, status_text);
@@ -1161,6 +1166,27 @@ namespace ShimmerAPI
 
 
         // btsd changes
+        /// <summary>
+        /// Reads the eight derived-channel bytes (GET_DERIVED_CHANNEL_BYTES, 0x6F), which carry
+        /// derived-sensor bit 29, the gyro on-the-fly offset calibration, and so turn it on or off.
+        /// <para>
+        /// The response is [ACK][0x6E][b0..b7] (log-and-stream-common
+        /// docs/SHIMMER3_BT_COMMUNICATION_PROTOCOL.md section 7.11). The Java driver uses all eight
+        /// from LogAndStream 0.7.1; the first firmware whose source is known to send eight is
+        /// 0.8.0, so that is the gate here, rather than risk reading past a shorter reply.
+        /// </para>
+        /// </summary>
+        protected void ReadDerivedChannelBytes()
+        {
+            if (HardwareVersion == (int)ShimmerBluetooth.ShimmerVersion.SHIMMER3R
+                || (HardwareVersion == (int)ShimmerBluetooth.ShimmerVersion.SHIMMER3
+                    && compareVersions(ShimmerBluetooth.FW_IDENTIFIER_LOGANDSTREAM, 0, 8, 0)))
+            {
+                WriteBytes(new byte[1] { (byte)ShimmerBluetooth.PacketTypeShimmer3.GET_DERIVED_CHANNEL_BYTES_COMMAND }, 0, 1);
+                waitTilTimeOut();
+            }
+        }
+
         private void waitTilTimeOut()
         {
             int timeout = 150;
@@ -2058,6 +2084,17 @@ namespace ShimmerAPI
                             tempCalibDump = ProgrammerUtilities.RemoveLastBytes(tempCalibDump, (int)BluetoothCRCMode);
                             break;
                         }
+                    case (byte)ShimmerBluetooth.PacketTypeShimmer3.DERIVED_CHANNEL_BYTES_RESPONSE:
+                        {
+                            long derivedSensors = 0;
+                            for (i = 0; i < 8; i++)
+                            {
+                                derivedSensors |= ((long)ReadByte() & 0xFF) << (8 * i);
+                            }
+                            SetDerivedSensors(derivedSensors);
+                        }
+                        SetDataReceived(true);
+                        break;
                     case (byte)ShimmerBluetooth.PacketTypeShimmer3SDBT.TRIAL_CONFIG_RESPONSE:
                         for (i = 0; i < 3; i++)
                         {

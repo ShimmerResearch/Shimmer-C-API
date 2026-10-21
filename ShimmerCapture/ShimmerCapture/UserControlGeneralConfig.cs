@@ -2461,7 +2461,7 @@ namespace ShimmerAPI
                 PConfiguration.PControlForm.ShimmerDevice.SetLowPowerAccel(checkBoxLowPowerAccel.Checked);
                 PConfiguration.PControlForm.ShimmerDevice.SetLowPowerGyro(checkBoxLowPowerGyro.Checked);
                 PConfiguration.PControlForm.ShimmerDevice.Set3DOrientation(checkBox3DOrientation.Checked);
-                PConfiguration.PControlForm.ShimmerDevice.SetGyroOnTheFlyCalibration(checkBoxGyroOnTheFly.Checked, 100, 1.2);
+                PConfiguration.PControlForm.ShimmerDevice.SetGyroOnTheFlyCalibration(checkBoxGyroOnTheFly.Checked);
             }
            
             if (!PConfiguration.PControlForm.ShimmerDevice.isShimmer3withUpdatedSensors())
