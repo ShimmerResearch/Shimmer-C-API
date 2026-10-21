@@ -18,6 +18,12 @@ namespace TestSerialPort
         /// </summary>
         protected static bool LastTimestampRejected = false;
         protected static double CurrentTimeStampCycle = 0;
+        /// <summary>
+        /// False only before the first sample. The pair above cannot say it on their
+        /// own: (0, 0) is also where a reordered packet landing on the counter's origin
+        /// leaves them, mid-stream.
+        /// </summary>
+        protected static bool HasPreviousTimeStamp = false;
         protected static double LastReceivedCalibratedTimeStamp = -1;
         protected static double TimeStampPacketRawMaxValue = 16777216;// 16777216 or 65536 
         protected static bool FirstTimeCalTime = true;
@@ -111,7 +117,9 @@ namespace TestSerialPort
             //same defect ended up in four Shimmer host APIs at once.
             TimestampUnwrap.Result unwrapped = TimestampUnwrap.Unwrap(
                 timeStamp, LastReceivedTimeStamp, CurrentTimeStampCycle, (int)TimeStampPacketRawMaxValue,
-                TimestampUnwrap.ReorderWindowTicks(SamplingRate, (int)TimeStampPacketRawMaxValue));
+                TimestampUnwrap.ReorderWindowTicks(SamplingRate, (int)TimeStampPacketRawMaxValue),
+                HasPreviousTimeStamp);
+            HasPreviousTimeStamp = true;
             LastTimestampRejected = unwrapped.Rejected;
             CurrentTimeStampCycle = unwrapped.Cycle;
             LastReceivedTimeStamp = unwrapped.Unwrapped;

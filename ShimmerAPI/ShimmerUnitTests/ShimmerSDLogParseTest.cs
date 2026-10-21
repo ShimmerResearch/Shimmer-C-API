@@ -318,9 +318,12 @@ namespace ShimmerBluetoothTests
                 var sdLog = new ShimmerSDLog(path);
                 List<double> timestamps = ReadAllTimestamps(sdLog);
 
+                Assert.AreEqual(RowCount, timestamps.Count, "every record is read");
                 double spanMs = timestamps[timestamps.Count - 1] - timestamps[0];
                 Assert.IsTrue(spanMs > 0, "a recording cannot have a negative duration");
-                Assert.AreEqual(RowCount * PeriodTicks / TicksPerSecond, spanMs / 1000.0, 0.01,
+                // RowCount samples span RowCount - 1 periods. One period is 2 ms, so the
+                // tolerance has to sit well inside it or an off-by-one passes unseen.
+                Assert.AreEqual((RowCount - 1) * PeriodTicks / TicksPerSecond, spanMs / 1000.0, 1e-6,
                     "and it lasts as long as the samples it holds");
             }
             finally
@@ -350,7 +353,7 @@ namespace ShimmerBluetoothTests
 
                     Assert.AreEqual(RowCount, timestamps.Count, version);
                     double spanMs = timestamps[timestamps.Count - 1] - timestamps[0];
-                    Assert.AreEqual(RowCount * PeriodTicks / TicksPerSecond, spanMs / 1000.0, 0.01,
+                    Assert.AreEqual((RowCount - 1) * PeriodTicks / TicksPerSecond, spanMs / 1000.0, 1e-6,
                         version + ": the recording lasts as long as the samples it holds");
                 }
                 finally
