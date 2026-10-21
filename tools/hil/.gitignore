@@ -1,0 +1,5 @@
+# Reports and logs from runs
+out/
+# A bench file belongs to its bench, not to this public repo: keep it outside and point -Rig or
+# $HIL_RIG at it (README)
+rig.toml

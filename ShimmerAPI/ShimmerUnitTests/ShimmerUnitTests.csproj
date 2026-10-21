@@ -73,6 +73,10 @@
     <Compile Include="TimestampUnwrapVectorsTest.cs" />
     <Compile Include="ShimmerReadDataPacketTest.cs" />
     <Compile Include="ShimmerStreamReadTest.cs" />
+    <Compile Include="HilStreamChecksTest.cs" />
+    <Compile Include="..\..\tools\hil\ShimmerApiHil\StreamChecks.cs">
+      <Link>Hil\StreamChecks.cs</Link>
+    </Compile>
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\ShimmerAPI\ShimmerAPI.csproj">
