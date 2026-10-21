@@ -1694,7 +1694,7 @@ namespace ShimmerAPI
                         break;
 
                     default:
-                        KeepObjectCluster = null;
+                        DiscardKeptPacket();
                         break;
                 }
             }

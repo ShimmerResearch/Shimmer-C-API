@@ -72,6 +72,7 @@
     <Compile Include="ShimmerSDLogParseTest.cs" />
     <Compile Include="TimestampUnwrapVectorsTest.cs" />
     <Compile Include="ShimmerReadDataPacketTest.cs" />
+    <Compile Include="ShimmerStreamReadTest.cs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\ShimmerAPI\ShimmerAPI.csproj">

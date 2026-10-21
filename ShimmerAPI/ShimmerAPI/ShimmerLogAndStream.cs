@@ -2008,7 +2008,7 @@ namespace ShimmerAPI
                         break;
 
                     default:
-                        KeepObjectCluster = null;
+                        DiscardKeptPacket();
                         break;
                 }
                 if (BluetoothCRCMode != BTCRCMode.OFF)

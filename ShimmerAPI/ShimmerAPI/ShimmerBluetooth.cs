@@ -177,6 +177,8 @@ namespace ShimmerAPI
         protected long EnabledSensors;
         protected long DerivedSensors;
         protected ObjectCluster KeepObjectCluster = null; // this is to keep the packet for one byte, just incase there is a dropped packet
+        /// <summary>The timestamp state from before KeepObjectCluster was built: what DiscardKeptPacket puts back.</summary>
+        TimestampState KeepTimestampState;
         public double[,] AlignmentMatrixAccel = new double[3, 3] { { -1, 0, 0 }, { 0, -1, 0 }, { 0, 0, 1 } };
         public double[,] SensitivityMatrixAccel = new double[3, 3] { { 38, 0, 0 }, { 0, 38, 0 }, { 0, 0, 38 } };
         public double[,] OffsetVectorAccel = new double[3, 1] { { 2048 }, { 2048 }, { 2048 } };
@@ -1321,6 +1323,21 @@ namespace ShimmerAPI
             OnNewEvent(newEventArgs);
         }
 
+        /// <summary>
+        /// Drops the packet held back for the next one's check (KeepObjectCluster). It has been built, so
+        /// its timestamp has already moved the unwrap: that is put back as it was before it. Otherwise a
+        /// misframed packet, whose timestamp is whatever bytes fell there, could add a wrap of 512 s to the
+        /// timeline of every packet after it (DEV-1274).
+        /// </summary>
+        protected void DiscardKeptPacket()
+        {
+            if (KeepObjectCluster != null)
+            {
+                RestoreTimestampState(KeepTimestampState);
+                KeepObjectCluster = null;
+            }
+        }
+
         public void ReadData()
         {
             List<byte> buffer = new List<byte>();
@@ -1377,6 +1394,9 @@ namespace ShimmerAPI
                                     }
 
                                     bool check = true;
+                                    // Building the packet moves the timestamp unwrap; this is what to put
+                                    // back if the packet is thrown away later (DiscardKeptPacket)
+                                    TimestampState beforeThisPacket = CaptureTimestampState();
                                     if (BluetoothCRCMode != BTCRCMode.OFF)
                                     {
                                         byte[] dataArray = dataByte.ToArray();
@@ -1411,8 +1431,9 @@ namespace ShimmerAPI
                                     // check if there was a previously received packet, if there is send that, as it is a packet without error (zero-zero test), each packet starts with zero
                                     if (KeepObjectCluster != null)
                                     {
-                                        //Check the time stamp
-                                        if (mEnableTimeStampAlignmentCheck)
+                                        //Check the time stamp. A packet whose CRC failed has no timestamp to
+                                        //check against, and the held packet's own CRC passed: deliver it
+                                        if (mEnableTimeStampAlignmentCheck && objectCluster != null)
                                         {
                                             if (packetTimeStampChecker(objectCluster.RawTimeStamp, KeepObjectCluster.RawTimeStamp))
                                             {
@@ -1422,8 +1443,13 @@ namespace ShimmerAPI
                                             else
                                             {
                                                 System.Console.WriteLine("Throwing Packet");
+                                                // Neither packet is delivered. Putting the unwrap back to before
+                                                // the held one undoes this one too, which was built after it
+                                                DiscardKeptPacket();
                                                 objectCluster = null;
 
+                                                // Out of step by a byte: a misframed stream can keep finding
+                                                // a 0x00 where the next packet should start
                                                 ReadByte();
                                             }
 
@@ -1440,6 +1466,7 @@ namespace ShimmerAPI
 
                                     }
                                     KeepObjectCluster = objectCluster;
+                                    KeepTimestampState = beforeThisPacket;
 
 
                                     buffer.Clear();
@@ -1464,7 +1491,7 @@ namespace ShimmerAPI
                                         byte c = (byte)ReadByte(); // get the next byte and pass it the ShimmerSDBT, this should be instreamcmd
                                         if (c != (byte)ShimmerBluetooth.PacketTypeShimmer3SDBT.INSTREAM_CMD_RESPONSE)
                                         {
-                                            KeepObjectCluster = null;
+                                            DiscardKeptPacket();
                                         }
                                         else
                                         {
@@ -1497,7 +1524,7 @@ namespace ShimmerAPI
                             default:
                                 System.Console.WriteLine("Misaligned ByteStream Detected");
                                 // If it gets here means the previous packet is invalid so make it null so it wont be added to the buffer
-                                KeepObjectCluster = null;
+                                DiscardKeptPacket();
                                 break;
                         }
                     }
@@ -7169,22 +7196,39 @@ namespace ShimmerAPI
             }
         }
         /// <summary>
-        /// This checks whether the time stamp has increased correctly
+        /// Whether a packet's timestamp follows its predecessor's as a correctly framed packet's does,
+        /// for the streaming alignment check (mEnableTimeStampAlignmentCheck, on for a Shimmer3R).
+        /// <para>
+        /// A correctly framed packet is ahead of its predecessor by a sampling period, give or take the
+        /// few ticks a Shimmer3R stamps the odd packet off the grid, or by a few periods when packets were
+        /// lost. A misframed one carries whatever bytes fell where its timestamp should be, which land in
+        /// a window of one second ahead about 0.2 % of the time. So any step forward within that window
+        /// passes: a second, or eight periods at a rate below 8 Hz.
+        /// </para>
+        /// <para>
+        /// It used to pass only a step within 5 % of one period. A Shimmer3R's off-grid stamp (137 ticks
+        /// at 256 Hz, whose period is 128) and every real gap failed, and each failure threw two correctly
+        /// framed packets away (DEV-1273).
+        /// </para>
         /// </summary>
         /// <param name="timeStamp2"> This is the most recent timestamp</param>
         /// <param name="timeStamp1"> this is the previously received timestamp</param>
-        /// <returns></returns>
+        /// <returns>true if the step is a plausible one forward; true as well before the sampling rate
+        /// is known, when there is nothing to judge it by</returns>
         public virtual bool packetTimeStampChecker(int timeStamp2, int timeStamp1)
         {
-            int upperLimit = ADCRawSamplingRateValue + (int)(ADCRawSamplingRateValue * 0.05);
-            int lowerLimit = ADCRawSamplingRateValue - (int)(ADCRawSamplingRateValue * 0.05);
-            if ((timeStamp2 - timeStamp1) < 0)
+            int period = ADCRawSamplingRateValue;
+            if (period <= 0)
             {
-                timeStamp2 = timeStamp2 + TimeStampPacketRawMaxValue;
-
+                return true;
             }
             int difference = timeStamp2 - timeStamp1;
-            if ((difference) > lowerLimit && (difference) < upperLimit)
+            if (difference < 0)
+            {
+                difference += TimeStampPacketRawMaxValue;
+            }
+            int window = Math.Max(32768, 8 * period);
+            if (difference > 0 && difference <= window)
             {
                 return true;
             }
