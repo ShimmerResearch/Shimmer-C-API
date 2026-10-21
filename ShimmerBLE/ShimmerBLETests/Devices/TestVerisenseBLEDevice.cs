@@ -41,6 +41,9 @@ namespace ShimmerBLETests.Communications
             BLERadio = new TestByteRadio();
         }
 
+        /// <summary>The fake radio, once Connect() has made it</summary>
+        public TestByteRadio Radio => (TestByteRadio)BLERadio;
+
         public void InjectDataSyncEndBytes()
         {
             ((TestByteRadio)BLERadio).InjectEndBytes();
