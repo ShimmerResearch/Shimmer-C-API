@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using ShimmerAPI;
 using static ShimmerAPI.ShimmerBluetooth;
 
 namespace TestSerialPort
@@ -10,7 +11,19 @@ namespace TestSerialPort
     class Program
     {
         protected static double LastReceivedTimeStamp = 0;
+        /// <summary>
+        /// True when the last packet carried an invalid zero timestamp and was
+        /// rejected rather than unwrapped - see TimestampUnwrap. This sample program
+        /// has nowhere to drop a packet to, so it reports it instead.
+        /// </summary>
+        protected static bool LastTimestampRejected = false;
         protected static double CurrentTimeStampCycle = 0;
+        /// <summary>
+        /// False only before the first sample. The pair above cannot say it on their
+        /// own: (0, 0) is also where a reordered packet landing on the counter's origin
+        /// leaves them, mid-stream.
+        /// </summary>
+        protected static bool HasPreviousTimeStamp = false;
         protected static double LastReceivedCalibratedTimeStamp = -1;
         protected static double TimeStampPacketRawMaxValue = 16777216;// 16777216 or 65536 
         protected static bool FirstTimeCalTime = true;
@@ -72,6 +85,13 @@ namespace TestSerialPort
                 }
                 double parsedts = parseTimeStamps(dataTS);
                 double calibratedts = CalibrateTimeStamp(parsedts);
+                if (LastTimestampRejected)
+                {
+                    //Said every time rather than once a second: these are rare, and
+                    //the timestamp printed for this packet is the previous one.
+                    System.Console.WriteLine();
+                    System.Console.WriteLine("packet with no timestamp - held the previous one");
+                }
                 if (i % SamplingRate == 0)
                     System.Console.Write(calibratedts + "," + (calibratedts-lastKnownTS) +"," + SerialPort.BytesToRead);
                 lastKnownTS = calibratedts;
@@ -93,12 +113,16 @@ namespace TestSerialPort
         {
             //first convert to continuous time stamp
             double calibratedTimeStamp = 0;
-            if (LastReceivedTimeStamp > (timeStamp + (TimeStampPacketRawMaxValue * CurrentTimeStampCycle)))
-            {
-                CurrentTimeStampCycle = CurrentTimeStampCycle + 1;
-            }
-
-            LastReceivedTimeStamp = (timeStamp + (TimeStampPacketRawMaxValue * CurrentTimeStampCycle));
+            //Shared with the API rather than copied: a copy of this rule is how the
+            //same defect ended up in four Shimmer host APIs at once.
+            TimestampUnwrap.Result unwrapped = TimestampUnwrap.Unwrap(
+                timeStamp, LastReceivedTimeStamp, CurrentTimeStampCycle, (int)TimeStampPacketRawMaxValue,
+                TimestampUnwrap.ReorderWindowTicks(SamplingRate, (int)TimeStampPacketRawMaxValue),
+                HasPreviousTimeStamp);
+            HasPreviousTimeStamp = true;
+            LastTimestampRejected = unwrapped.Rejected;
+            CurrentTimeStampCycle = unwrapped.Cycle;
+            LastReceivedTimeStamp = unwrapped.Unwrapped;
             calibratedTimeStamp = LastReceivedTimeStamp / 32768 * 1000;   // to convert into mS
             if (FirstTimeCalTime)
             {

@@ -372,8 +372,7 @@ namespace ShimmerAPI
                     if (IsFilled)
                     {
                         StreamingACKReceived = false;
-                        LastReceivedTimeStamp = 0;
-                        CurrentTimeStampCycle = 0;
+                        ResetTimeStampUnwrap();
                         LastReceivedCalibratedTimeStamp = -1;
                         FirstTimeCalTime = true;
                         PacketLossCount = 0;
