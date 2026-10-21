@@ -26,12 +26,23 @@ Two workflows, both triggered on push to `master` and PRs into it:
   `ShimmerUnitTests/bin/Debug/ShimmerBluetoothTests.dll`.
 
 Anything outside those two solutions — every example app, the 32Feet apps, the gRPC and protobuf
-tests, `ShimmerCaptureXamarin` — is **never built by CI**.
+tests, `ShimmerCaptureXamarin`, the hardware suite in `tools/hil` — is **never built by CI**. The
+hardware suite's stream checks are the exception: the unit tests compile `StreamChecks.cs` in and run
+`HilStreamChecksTest`.
 
 ## Releases publish to NuGet from CI
 
-To release, open **Actions → PublishNuGet → Run workflow** on `master` and pick the part to bump —
-`patch` by default. That is the whole process: no version edits, no uprev PR, no hand-made release.
+To release:
+
+1. On the bench, at the commit being released, run the hardware tests:
+   `tools/hil/run-csharp-hil.ps1 -Report` (see `tools/hil/README.md`). It posts the commit status
+   `csharp-hil`.
+2. Open **Actions → PublishNuGet → Run workflow** on `master` and pick the part to bump — `patch` by
+   default.
+
+That is the whole process: no version edits, no uprev PR, no hand-made release. The run stops before
+building unless the newest `csharp-hil` status on the commit is `success`, or `hil_waiver` names a Jira
+key; the release notes record which.
 
 The run takes the latest `vX.Y.Z` tag (other tag formats in this repo, such as `BLEv…` and `REV0_…`,
 are ignored), bumps it, and stamps that version into the build: `-p:Version` for both projects, plus a
