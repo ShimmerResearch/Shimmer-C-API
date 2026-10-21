@@ -5632,6 +5632,16 @@ namespace ShimmerAPI
                         //System.Console.WriteLine("PRR: " + PacketReceptionRate);
                     }
                 }
+                else if (timeDifference < 0 && PacketLossCount > 0)
+                {
+                    //A reordered packet, arriving after the one that skipped over it: its slot
+                    //was counted as lost when that gap was seen. Count it back, so a swapped
+                    //pair costs nothing - as in the Java driver, which counts packets received
+                    //against those expected from the time elapsed
+                    PacketLossCount = PacketLossCount - 1;
+                    long totalNumberOfPackets = (long)((LastReceivedCalibratedTimeStamp - CalTimeStart) / expectedTimeDifference);
+                    PacketReceptionRate = (double)((totalNumberOfPackets - PacketLossCount) / (double)totalNumberOfPackets) * 100;
+                }
             }
 
             EventHandler handler = UICallback;
@@ -5641,7 +5651,12 @@ namespace ShimmerAPI
                 handler(this, newEventArgs);
             }
 
-            LastReceivedCalibratedTimeStamp = calibratedTimeStamp;
+            //Only forward: measured from a reordered packet's earlier time, the next
+            //in-order packet would look like a gap and be counted as lost
+            if (calibratedTimeStamp > LastReceivedCalibratedTimeStamp)
+            {
+                LastReceivedCalibratedTimeStamp = calibratedTimeStamp;
+            }
             return calibratedTimeStamp - CalTimeStart; // make it start at zero
         }
 

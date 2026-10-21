@@ -240,5 +240,32 @@ namespace ShimmerBluetoothTests
             Assert.AreEqual(nearTop, device.Feed(nearTop), "the new stream's first sample passes through");
             Assert.AreEqual(nearTop + 640, device.Feed(540), "and the stream wraps forward from it");
         }
+
+        /// <summary>
+        /// A packet that arrives after the one that skipped over it is not lost. Its gap
+        /// is counted when the later packet arrives, and given back when it turns up,
+        /// so a swapped pair costs nothing, as in the Java driver. The packet after it
+        /// is measured from the later of the two: measured from the late packet's
+        /// earlier time, it looked like a second gap. At 512 Hz, where a period is 64
+        /// ticks and the millisecond arithmetic is exact.
+        /// </summary>
+        [TestMethod]
+        public void TestALatePacketIsNotCountedAsLost()
+        {
+            var swapped = new UnwrapDevice(512);
+            foreach (double raw in new double[] { 1024, 1152, 1088, 1216 })
+            {
+                swapped.Feed(raw);
+            }
+            Assert.AreEqual(0L, swapped.PacketLossCount, "a swapped pair loses nothing");
+            Assert.AreEqual(100.0, swapped.PacketReceptionRate, 1e-9, "and receives everything");
+
+            var lost = new UnwrapDevice(512);
+            foreach (double raw in new double[] { 1024, 1152, 1216 })
+            {
+                lost.Feed(raw);
+            }
+            Assert.AreEqual(1L, lost.PacketLossCount, "a packet that never comes is still lost");
+        }
     }
 }
