@@ -14,6 +14,11 @@ name: PublishNuGet
 # updating that policy.
 # Pull requests that touch either package run the build job at the next patch version, with
 # read-only permissions and no publish job.
+#
+# Hardware test gate: before releasing, run tools/hil/run-csharp-hil.ps1 -Report on the bench at the
+# commit being released (see tools/hil/README.md). It posts the commit status "csharp-hil". A
+# release stops before building unless that status passed for this commit, or hil_waiver gives a
+# Jira key; the release notes say which.
 
 on:
   workflow_dispatch:
@@ -23,6 +28,10 @@ on:
         type: choice
         options: [ patch, minor, major ]
         default: patch
+      hil_waiver:
+        description: 'Jira key to release without a passing hardware test (HIL), e.g. DEV-1234. Blank = require one'
+        type: string
+        default: ''
   pull_request:
     branches: [ master ]
     paths:
@@ -42,12 +51,18 @@ jobs:
 
     runs-on: windows-latest
 
+    # statuses: the HIL gate reads the commit's "csharp-hil" status
+    permissions:
+      contents: read
+      statuses: read
+
     env:
       PACKAGE_DIR: ${{ github.workspace }}\nupkg-out
 
     outputs:
       version: ${{ steps.version.outputs.version }}
       previous_tag: ${{ steps.version.outputs.previous_tag }}
+      hil: ${{ steps.hil.outputs.hil }}
 
     steps:
     - name: Check the release is from master
@@ -55,6 +70,37 @@ jobs:
       run: |
         Write-Error "Releases are made from master. Run the workflow again with 'Use workflow from: master', not $env:GITHUB_REF_NAME."
         exit 1
+    # Before any building, so a release without a hardware test fails in seconds.
+    - name: Check the hardware test (HIL) result
+      id: hil
+      if: github.event_name == 'workflow_dispatch'
+      env:
+        GH_TOKEN: ${{ github.token }}
+        WAIVER: ${{ inputs.hil_waiver }}
+      run: |
+        $context = 'csharp-hil'
+        if ($env:WAIVER -and $env:WAIVER -cnotmatch '^[A-Z][A-Z0-9]+-[0-9]+$') {
+          Write-Error "hil_waiver must be a Jira key such as DEV-1234, not '$env:WAIVER'."
+          exit 1
+        }
+        # Newest first: the latest result for this context on this exact commit decides.
+        $lines = @(gh api "repos/$env:GITHUB_REPOSITORY/commits/$env:GITHUB_SHA/statuses" --paginate --jq ".[] | select(.context == `"$context`") | [.state, .description] | @tsv")
+        if ($LASTEXITCODE -ne 0) {
+          Write-Error "Could not read the commit statuses of $env:GITHUB_SHA."
+          exit 1
+        }
+        $state, $description = if ($lines.Count -gt 0) { $lines[0] -split "`t", 2 } else { '', '' }
+        if ($state -eq 'success') {
+          "Hardware test passed on $env:GITHUB_SHA`: $description"
+          "hil=Tested on hardware before release: $description." >> $env:GITHUB_OUTPUT
+        } elseif ($env:WAIVER) {
+          Write-Host "::warning::No passing '$context' on $env:GITHUB_SHA (found: $(if ($state) { $state } else { 'none' })); released under waiver $env:WAIVER."
+          "hil=Released without a passing hardware test (HIL), waived under $env:WAIVER." >> $env:GITHUB_OUTPUT
+        } else {
+          $found = if ($state) { "$state`: $description" } else { 'none' }
+          Write-Error "No passing '$context' on $env:GITHUB_SHA (found: $found). On the bench, at this commit, run: tools/hil/run-csharp-hil.ps1 -Report. Then run this workflow again, or give a Jira key in hil_waiver."
+          exit 1
+        }
     - uses: actions/checkout@v4
     - name: Work out the version
       id: version
@@ -124,6 +170,7 @@ jobs:
       PACKAGE_DIR: ${{ github.workspace }}\nupkg-out
       VERSION: ${{ needs.build.outputs.version }}
       PREVIOUS_TAG: ${{ needs.build.outputs.previous_tag }}
+      HIL: ${{ needs.build.outputs.hil }}
 
     steps:
     - name: Download packages
@@ -153,5 +200,6 @@ jobs:
       run: |
         # Last, so a failed push leaves no tag behind.
         $notes = "NuGet: https://www.nuget.org/packages/ShimmerAPI/$env:VERSION and https://www.nuget.org/packages/Shimmer32FeetAPI/$env:VERSION"
+        $notes += "`n`n$(if ($env:HIL) { $env:HIL } else { 'No hardware test result' })"
         gh release create "v$env:VERSION" --target $env:GITHUB_SHA --title "Shimmer C# API Rev $env:VERSION" --notes $notes --generate-notes --notes-start-tag $env:PREVIOUS_TAG
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

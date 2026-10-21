@@ -1,0 +1,30 @@
+# The bench, for the C# API's hardware-in-the-loop suite (tools/hil). Keep the real one outside this
+# public repo, and point -Rig or $HIL_RIG at it.
+#
+# The same format as the firmware HIL's rig.toml (log-and-stream-common Test/hil) and the
+# shimmer-logandstream HIL's, so one bench file can serve every suite: name units by what survives
+# a reboot (the Bluetooth MAC), never by COM number. Keys this suite does not use are ignored.
+
+bench = "my-bench"            # appears in the report; one name per physical bench
+# settle_seconds = 8          # rest between two links to a unit
+
+[[unit]]
+name = "s3r-a"
+platform = "shimmer3r"
+mac = "AABBCCDD0001"           # Bluetooth MAC, 12 hex digits
+radio = "IF820"                # for the report
+transports = ["classic", "ble"]   # which links to test; classic needs the unit paired in Windows
+# accel_tolerance_ms2 = 1.0       # the allowance around 9.81 m/s^2 for a unit at rest
+
+[[unit]]
+name = "s3-a"
+platform = "shimmer3"
+mac = "AABBCCDD0002"
+radio = "RN4678"
+transports = ["classic", "ble"]
+# A unit holding only its default accel calibration reads about 11.3 m/s^2 at rest.
+accel_tolerance_ms2 = 2.0
+# Item, or item and transport -> why it is not tested on this unit. It is reported not_covered with
+# that reason, and the release gate then needs a waiver.
+[unit.known_issues]
+# "stream.log_and_battery:ble" = "why, with the ticket that tracks it"
