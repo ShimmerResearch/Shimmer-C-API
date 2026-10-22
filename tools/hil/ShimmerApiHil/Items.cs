@@ -21,7 +21,7 @@ namespace ShimmerApiHil
     }
 
     /// <summary>
-    /// The items. Each streams accel only at 256 Hz (<see cref="Link.Configure"/>), as the Android HIL
+    /// The items. Each streams accel only, at 256 Hz unless the run gives --rate (<see cref="Link.Configure"/>), as the Android HIL
     /// does, and judges the stream with <see cref="StreamChecks"/>.
     /// </summary>
     public static class Items
@@ -33,6 +33,11 @@ namespace ShimmerApiHil
         public const double ReconnectSeconds = 5;
         /// <summary>Past the 3-byte timestamp's wrap, 2^24 ticks = 512 s, wherever the stream starts.</summary>
         public const double RolloverSeconds = 600;
+        /// <summary>How long link.idle_start leaves the link idle before it starts streaming.</summary>
+        public const double IdleSeconds = 60;
+        /// <summary>The slowest start link.idle_start accepts after the wait, as the shimmer-logandstream
+        /// HIL's classic.idle_start does.</summary>
+        public const double IdleStartLimitMs = 500;
 
         public static readonly Item[] All =
         {
@@ -44,6 +49,8 @@ namespace ShimmerApiHil
                 What = "Starts streaming and SD logging together, reads the battery three times while streaming, then stops both" },
             new Item { Id = "link.reconnect_loop", Run = ReconnectLoop, BudgetSeconds = 600,
                 What = "Connects, streams 5 s and disconnects, five times" },
+            new Item { Id = "link.idle_start", Run = IdleStart, BudgetSeconds = 300,
+                What = "Connects, leaves the link idle 60 s, then streams 10 s" },
             new Item { Id = "stream.rollover", Run = Rollover, OncePerUnit = true, BudgetSeconds = 900,
                 What = "Streams 10 minutes, across the 512 s wrap of the 3-byte timestamp, on one transport per unit" },
         };
@@ -207,6 +214,60 @@ namespace ShimmerApiHil
                 }
             }
             c.Note(ReconnectCycles + " cycles connected, streamed and disconnected");
+        }
+
+        /// <summary>
+        /// A link left idle, as an application's is between configuring a unit and starting it. The
+        /// suite sends nothing for a minute. The API sends a status request on its own after every few
+        /// read timeouts, and declares the connection lost after more than ten in a row with nothing
+        /// read. Then the stream has to start promptly and be whole.
+        /// </summary>
+        static void IdleStart(Case c, Session s)
+        {
+            s.WithLink(c, link =>
+            {
+                link.Configure();
+                double started = c.Now;
+                int logBefore;
+                lock (c.Log)
+                {
+                    logBefore = c.Log.Count;
+                }
+                while (c.Now - started < IdleSeconds)
+                {
+                    Thread.Sleep(200);
+                    if (link.ConnectionLost)
+                    {
+                        throw new HilFailure(string.Format(CultureInfo.InvariantCulture, "the API reported the connection lost {0:F0} s into the idle wait", c.Now - started));
+                    }
+                    if (link.Device.GetState() != ShimmerBluetooth.SHIMMER_STATE_CONNECTED)
+                    {
+                        throw new HilFailure(string.Format(CultureInfo.InvariantCulture, "the API left Connected {0:F0} s into the idle wait (state {1})", c.Now - started, link.Device.GetStateString()));
+                    }
+                }
+                int polls;
+                lock (c.Log)
+                {
+                    polls = c.Log.Skip(logBefore).Count(line => line.Contains("Sending Get Status Command"));
+                }
+                link.StartStreaming();
+                double startMs = link.LastStartMs;
+                StreamChecks.Stream stream = link.Record(CrcSeconds);
+                link.StopStreaming();
+                var problems = new List<string>();
+                StreamChecks.Figures f = StreamChecks.Measure(stream, c.Unit.Platform);
+                c.Note(string.Format(CultureInfo.InvariantCulture, "idle {0:F0} s with {1} status polls by the API; streaming {2:F0} ms after the start command; {3}",
+                    IdleSeconds, polls, startMs, f.Summary()));
+                if (startMs > IdleStartLimitMs)
+                {
+                    problems.Add(string.Format(CultureInfo.InvariantCulture, "streaming started {0:F0} ms after the start command, over {1:F0} ms", startMs, IdleStartLimitMs));
+                }
+                problems.AddRange(StreamChecks.Failures(f, accelToleranceMs2: c.Unit.AccelToleranceMs2));
+                if (problems.Count > 0)
+                {
+                    throw new HilFailure(string.Join("; ", problems));
+                }
+            });
         }
 
         static void Rollover(Case c, Session s)

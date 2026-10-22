@@ -202,7 +202,8 @@ namespace ShimmerApiHil
             var args = new StringBuilder();
             args.Append("--run-case ").Append(Quote(item.Id)).Append(" --unit ").Append(Quote(unit.Name))
                 .Append(" --transport ").Append(transport).Append(" --rig ").Append(Quote(rigPath))
-                .Append(" --out ").Append(Quote(outDir));
+                .Append(" --out ").Append(Quote(outDir))
+                .Append(" --rate ").Append(Link.RateHz.ToString(System.Globalization.CultureInfo.InvariantCulture));
             string why;
             if (suspect.TryGetValue(unit.Name, out why))
             {
@@ -215,6 +216,7 @@ namespace ShimmerApiHil
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
             };
+            int exitCode;
             using (Process child = Process.Start(info))
             {
                 // Drained so a full pipe never stalls the child; it logs to its own file
@@ -239,16 +241,43 @@ namespace ShimmerApiHil
                         ["hung"] = "the run did not finish",
                     };
                 }
+                exitCode = child.ExitCode;
                 if (!File.Exists(resultFile))
                 {
                     return new JObject
                     {
                         ["status"] = "fail",
-                        ["note"] = where + ": the run's process ended (exit " + child.ExitCode + ") without a result",
+                        ["note"] = where + ": the run's process ended (exit " + exitCode + ") without a result" + Crash(item, unit, transport),
                     };
                 }
             }
-            return JObject.Parse(File.ReadAllText(resultFile));
+            JObject result = JObject.Parse(File.ReadAllText(resultFile));
+            if (exitCode != 0)
+            {
+                // The case had finished, and then something the API left running ended the process.
+                // An application would have gone down with it
+                result["status"] = "fail";
+                result["note"] = (string)result["note"] + "; then the run's process ended (exit " + exitCode + ")" + Crash(item, unit, transport);
+            }
+            return result;
+        }
+
+        /// <summary>Where a child run leaves the exception that ended its process, if one did.</summary>
+        public static string CrashFile(string outDir, string item, string unit, string transport)
+        {
+            return Path.Combine(outDir, "logs", item + "-" + unit + "-" + transport + ".crash.txt");
+        }
+
+        /// <summary>The first line of the exception that ended a child run's process, for its note.</summary>
+        string Crash(Item item, Unit unit, string transport)
+        {
+            string file = CrashFile(outDir, item.Id, unit.Name, transport);
+            if (!File.Exists(file))
+            {
+                return "";
+            }
+            string first = File.ReadLines(file).FirstOrDefault() ?? "";
+            return ": " + first.Trim() + " (" + Path.GetFileName(file) + ")";
         }
 
         static string Quote(string arg)
@@ -393,6 +422,7 @@ namespace ShimmerApiHil
                     ["path"] = api.Location,
                 },
                 ["bench"] = Rig.Bench,
+                ["rate_hz"] = Link.RateHz,
                 ["operator"] = Environment.UserName,
                 ["created"] = started.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'"),
                 ["duration_s"] = (int)Math.Round(clock.Elapsed.TotalSeconds),

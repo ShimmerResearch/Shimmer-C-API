@@ -74,6 +74,54 @@ namespace ShimmerAPI
         }
 
         /// <summary>
+        /// What one sample's <see cref="CalibrateTimeStamp"/> changes: the timestamp unwrap, and the
+        /// packet-loss estimate it feeds. ReadData captures it before it builds each packet and puts it
+        /// back for a packet it then throws away, so a misframed packet's garbage timestamp cannot stay
+        /// in the timeline of the packets after it (DEV-1274).
+        /// </summary>
+        protected struct TimestampState
+        {
+            internal double LastReceivedTimeStamp;
+            internal double CurrentTimeStampCycle;
+            internal bool HasPreviousTimeStamp;
+            internal bool LastTimestampRejected;
+            internal double LastReceivedCalibratedTimeStamp;
+            internal bool FirstTimeCalTime;
+            internal double CalTimeStart;
+            internal long PacketLossCount;
+            internal double PacketReceptionRate;
+        }
+
+        protected TimestampState CaptureTimestampState()
+        {
+            return new TimestampState
+            {
+                LastReceivedTimeStamp = LastReceivedTimeStamp,
+                CurrentTimeStampCycle = CurrentTimeStampCycle,
+                HasPreviousTimeStamp = HasPreviousTimeStamp,
+                LastTimestampRejected = LastTimestampRejected,
+                LastReceivedCalibratedTimeStamp = LastReceivedCalibratedTimeStamp,
+                FirstTimeCalTime = FirstTimeCalTime,
+                CalTimeStart = CalTimeStart,
+                PacketLossCount = PacketLossCount,
+                PacketReceptionRate = PacketReceptionRate,
+            };
+        }
+
+        protected void RestoreTimestampState(TimestampState state)
+        {
+            LastReceivedTimeStamp = state.LastReceivedTimeStamp;
+            CurrentTimeStampCycle = state.CurrentTimeStampCycle;
+            HasPreviousTimeStamp = state.HasPreviousTimeStamp;
+            LastTimestampRejected = state.LastTimestampRejected;
+            LastReceivedCalibratedTimeStamp = state.LastReceivedCalibratedTimeStamp;
+            FirstTimeCalTime = state.FirstTimeCalTime;
+            CalTimeStart = state.CalTimeStart;
+            PacketLossCount = state.PacketLossCount;
+            PacketReceptionRate = state.PacketReceptionRate;
+        }
+
+        /// <summary>
         /// Resets the timestamp unwrap at a stream start, so that the stream's first
         /// sample is taken as a first sample. Every stream start calls this rather than
         /// clearing the fields itself: a copy that cleared only LastReceivedTimeStamp and

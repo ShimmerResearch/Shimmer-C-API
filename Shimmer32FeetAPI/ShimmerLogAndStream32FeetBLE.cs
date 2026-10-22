@@ -4,6 +4,7 @@ using InTheHand.Bluetooth;
 using System.Collections.Concurrent;
 using System.Threading;
 using System.Diagnostics;
+using ShimmerAPI.Utilities;
 
 namespace ShimmerAPI
 {
@@ -14,7 +15,8 @@ namespace ShimmerAPI
         private GattCharacteristic UartTX { get; set; }
         private GattCharacteristic UartRX { get; set; }
         protected String macAddress { get; set; }
-        ConcurrentQueue<byte> cq = new ConcurrentQueue<byte>();
+        /// <summary>What the notifications delivered, for ReadByte. A new one for each link: see OpenConnection.</summary>
+        LinkByteBuffer received = new LinkByteBuffer();
         private static bool Debug = false;
         /// <summary>
         /// 
@@ -41,8 +43,17 @@ namespace ShimmerAPI
 
         protected override void CloseConnection()
         {
-            bluetoothDevice.GattServerDisconnected -= Device_GattServerDisconnected;
-            bluetoothDevice.Gatt.Disconnect();
+            try
+            {
+                bluetoothDevice.GattServerDisconnected -= Device_GattServerDisconnected;
+                bluetoothDevice.Gatt.Disconnect();
+            }
+            finally
+            {
+                // Wakes a ReadByte that is waiting, so the read thread stops rather than wait for a
+                // byte that cannot come. Last, so Disconnect stops the thread straight after
+                received.Close();
+            }
         }
 
         protected override void FlushConnection()
@@ -76,6 +87,8 @@ namespace ShimmerAPI
             try
             {
                 SetState(SHIMMER_STATE_CONNECTING);
+                // A closed buffer stays closed, and a previous link's bytes are not this link's
+                received = new LinkByteBuffer();
                 bluetoothDevice = BluetoothDevice.FromIdAsync(macAddress).GetAwaiter().GetResult();
                 bluetoothDevice.Gatt.ConnectAsync().GetAwaiter().GetResult();
                 Console.WriteLine("current mtu value " + bluetoothDevice.Gatt.Mtu);
@@ -159,33 +172,39 @@ namespace ShimmerAPI
             {
                 Console.WriteLine("RXB:" + BitConverter.ToString(args.Value).Replace("-", ""));
             }
-            for (int i = 0; i < args.Value.Length; i++)
-            {
-                cq.Enqueue(args.Value[i]);
-            }
+            received.Add(args.Value);
         }
 
+        /// <summary>
+        /// The next byte the device sent, waiting up to ReadTimeout for one and then throwing
+        /// TimeoutException, as the serial port's read does. It used to spin until a byte arrived, with no
+        /// timeout and no check of the link: the read thread took a whole CPU core while connected, and
+        /// never stopped after Disconnect, so each link left a core spinning until the process ended
+        /// (DEV-1270). ReadData's timeout handling, the idle status poll and "Connection lost", now
+        /// works over BLE as it does over a serial port.
+        /// </summary>
         protected override int ReadByte()
         {
-            if (GetState() != SHIMMER_STATE_NONE)
-            {
-                byte b = 0xFF;
-                //Timer timer = new Timer((obj) => throw new TimeoutException(), null, 30000, Timeout.Infinite);
-                while (!cq.TryDequeue(out b))
-                {
-
-                }
-                //timer.Dispose();
-                return b;
-            }
-            throw new InvalidOperationException();
+            return received.Read(ReadTimeout);
         }
 
+        /// <summary>
+        /// Writes without waiting for the write to finish. This is async void, so an exception from the
+        /// write would reach no caller and end the process instead: a write to a link that has gone, such
+        /// as ReadData's status poll in the moment Disconnect tears the link down, is logged and dropped.
+        /// </summary>
         protected override async void WriteBytes(byte[] b, int index, int length)
         {
             if (GetState() != SHIMMER_STATE_NONE)
             {
-                await UartTX.WriteValueWithoutResponseAsync(b);
+                try
+                {
+                    await UartTX.WriteValueWithoutResponseAsync(b);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("Radio Plugin 32Feet write failed: " + ex.Message);
+                }
             }
         }
     }

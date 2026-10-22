@@ -25,6 +25,8 @@ param(
     [string[]]$Item,
     [string[]]$Unit,
     [string[]]$Transport,
+    # The sampling rate every item streams at, in Hz. Default 256, the release gate's.
+    [double]$Rate = 256,
     # List the items and stop.
     [switch]$List,
     # Run as the release gate and post the commit status "csharp-hil".
@@ -76,6 +78,7 @@ if ($Report) {
         Fail '-Report needs every item on every unit and transport in the rig; drop -Item, -Unit and -Transport.'
     }
     if ($SkipBuild) { Fail '-Report tests a fresh build of the commit; drop -SkipBuild.' }
+    if ($Rate -ne 256) { Fail '-Report runs at the default rate; drop -Rate.' }
     $bench = (& $exe --rig $Rig --describe) | ConvertFrom-Json
     if ($LASTEXITCODE -ne 0) { Fail "Cannot read the bench file $Rig." }
     $platforms = @($bench.units | ForEach-Object { $_.platform } | Sort-Object -Unique)
@@ -98,7 +101,7 @@ if ($Report) {
 # --- Run ---------------------------------------------------------------------------------------
 $outDir = Join-Path $PSScriptRoot ('out\' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
 $label = if ($dirty) { "$commit+dirty" } else { $commit }
-$arguments = @('--rig', $Rig, '--out', $outDir, '--commit', $label)
+$arguments = @('--rig', $Rig, '--out', $outDir, '--commit', $label, '--rate', $Rate.ToString([Globalization.CultureInfo]::InvariantCulture))
 foreach ($i in @($Item)) { if ($i) { $arguments += @('--item', $i) } }
 foreach ($u in @($Unit)) { if ($u) { $arguments += @('--unit', $u) } }
 foreach ($t in @($Transport)) { if ($t) { $arguments += @('--transport', $t) } }

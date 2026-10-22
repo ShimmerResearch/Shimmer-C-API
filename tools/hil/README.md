@@ -45,10 +45,12 @@ It follows the other Shimmer HILs rather than inventing its own conventions:
 .\tools\hil\run-csharp-hil.ps1                                         # everything, on $env:HIL_RIG
 .\tools\hil\run-csharp-hil.ps1 -Item stream.rest -Unit s3r-a -Transport ble
 .\tools\hil\run-csharp-hil.ps1 -List                                   # the items
+.\tools\hil\run-csharp-hil.ps1 -Rate 1024                              # everything at 1024 Hz
 .\tools\hil\run-csharp-hil.ps1 -Report                                 # the release gate's run
 ```
 
-A full run takes about 40 minutes, half of it the two 10-minute `stream.rollover` runs. Each run's
+A full run takes about 45 minutes, nearly half of it the two 10-minute `stream.rollover` runs.
+`-Rate` sets the rate every item streams at (default 256 Hz); the release gate runs at the default. Each run's
 report and logs go to `tools/hil/out/<time>/`, which git ignores:
 
 - `report.json`: the results, in the shimmer-logandstream HIL's structure.
@@ -56,7 +58,7 @@ report and logs go to `tools/hil/out/<time>/`, which git ignores:
 - `logs/<item>-<unit>-<transport>.csv`: every sample the checks judged: raw ticks, arrival time,
   calibrated timestamp and accel.
 
-The suite writes accel only at 256 Hz to each unit (the Android HIL's configuration). It writes it only
+The suite writes accel only at 256 Hz, or `-Rate`, to each unit (the Android HIL's configuration). It writes it only
 when a unit's configuration differs, and leaves the unit that way afterwards.
 
 ## The items
@@ -67,6 +69,7 @@ when a unit's configuration differs, and leaves the unit that way afterwards.
 | `crc.stream` | Switches the link CRC to 1 byte and then 2 bytes with `WriteCRCMode`, and streams 10 s in each | the switch does not take, or a stream fails the checks |
 | `stream.log_and_battery` | Starts streaming and SD logging together (`StartStreamingandLog`), reads the battery three times while streaming, and stops both | a command fails, no battery reply arrives while streaming, or the stream fails the checks |
 | `link.reconnect_loop` | Connects, streams 5 s and disconnects, five times | any cycle fails to connect, stream or disconnect |
+| `link.idle_start` | Connects, leaves the link idle 60 s, then streams 10 s | the API reports the connection lost during the wait, streaming starts over 500 ms after the start command (the shimmer-logandstream HIL's limit), or the stream fails the checks |
 | `stream.rollover` | Streams 10 minutes, across the 512 s wrap of the 3-byte timestamp, on one transport per unit (Classic where it has one) | the checks below, or the API's calibrated timeline steps by over 1 s, runs backwards, or stops matching the device's ticks |
 
 **The stream checks** use the unit's own timestamps, so a loss is a gap in its sequence rather than the
@@ -81,8 +84,10 @@ PC's scheduling. A stream fails when:
 
 **One process per run.** The suite starts a fresh process of itself for each run, so each starts as an
 application would. A run can leave behind whatever the API leaves running: a read thread that never
-stops, or a call that never returned. In a shared process those would slow or break every later run,
-and the failure would land on the wrong item. The process's exit takes them with it.
+stops, as the BLE link's did until DEV-1270, or a call that never returned. In a shared process those
+would slow or break every later run, and the failure would land on the wrong item. The process's exit
+takes them with it. A run whose process crashes fails, even when the crash comes after its result, as
+an application would have gone down with it; the exception is left in `logs/` as `<run>.crash.txt`.
 
 **Watchdog.** Every API call has 10 s to return (45 s for `Connect`), or the run fails naming the call.
 A run that overruns its item's time budget is stopped. Either way the unit is checked on its next run:
@@ -117,16 +122,14 @@ why it is released without one. The release notes say which.
 
 - **Rest between links.** Windows holds a closed link for a few seconds. The suite rests 8 s between
   runs; set `settle_seconds` in the rig to change it.
-- **Any unit over BLE.** `ShimmerLogAndStream32FeetBLE.ReadByte` waits for a byte by spinning, without
-  checking the link. Its read thread takes a whole CPU core while connected and never stops after
-  `Disconnect`, so each BLE connection in a process leaves a core spinning. The one-process-per-run
-  design keeps that from reaching the next run (DEV-1270).
-- **A Shimmer3R's timestamp check.** On a Shimmer3R the API checks each packet's timestamp step against
-  ±5 % of the sampling period. A step outside that is discarded, and the byte after it read away, which
-  misaligns the stream and loses a few more packets. A Shimmer3R stamps the odd packet a few ticks off
-  the grid (137 ticks instead of 128 at 256 Hz), so `stream.rest` can lose a fraction of a percent this way
-  (DEV-1273). A packet thrown away has already moved the timestamp unwrap, so a misaligned stream can
-  also jump 512 s (DEV-1274).
+- **One Bluetooth adapter, one stream.** Another stream on the PC's adapter costs samples that are
+  not the API's to lose. On the bench the suite was written on, a Shimmer3 lost 14-37 % over Classic
+  while a Shimmer3R streamed at 1024 Hz beside it. A clear BLE link's longest silence is about 25 ms.
+  A run with silences near 240 ms was on a congested link: it got a third of its samples at 1024 Hz,
+  and all of them once the adapter was quiet. Run it again with the adapter to itself.
+- **A Shimmer3 over Classic** can lose samples on its own side: gaps in its own timestamps, with no
+  misalignment or CRC failure in the API. Most of all with a 2-byte link CRC (13-18 % in `crc.stream`,
+  where a 1-byte CRC loses little or nothing). The Android HIL sees the same (DEV-1248).
 - **A Shimmer3 over BLE.** These all showed on the bench the suite was written on:
   - LogAndStream v1.1.5 with an RN4678 can stop answering after a configuration write over BLE. The
     suite writes the configuration only when it differs, which keeps BLE runs clear of that (DEV-1246).
