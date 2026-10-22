@@ -45,14 +45,14 @@ namespace ShimmerApiHil
         /// <summary>
         /// Opens a link to the case's unit, runs the body, and closes the link whatever happens. A
         /// failure to close after the body passed fails the run; after the body failed, it is logged
-        /// and the body's failure stands.
+        /// and the body's failure stands. <paramref name="onFirstConnected"/> is <see cref="Link.Open"/>'s.
         /// </summary>
-        public void WithLink(Case c, Action<Link> body)
+        public void WithLink(Case c, Action<Link> body, Action<Link> onFirstConnected = null)
         {
             Link link;
             try
             {
-                link = Link.Open(c);
+                link = Link.Open(c, onFirstConnected);
             }
             catch (HilFailure e)
             {
