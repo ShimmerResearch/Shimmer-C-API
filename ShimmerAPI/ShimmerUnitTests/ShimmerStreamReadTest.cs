@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -61,7 +62,9 @@ namespace ShimmerBluetoothTests
             Assert.IsTrue(cpu.TotalMilliseconds < 300, "the wait used " + cpu.TotalMilliseconds + " ms of CPU");
         }
 
-        /// <summary>Closing the buffer, as closing the link does, wakes a read that is waiting.</summary>
+        /// <summary>Closing the buffer, as closing the link does, wakes a read that is waiting. The read
+        /// throws IOException, as a serial port's does when it is closed: a timeout would have ReadData
+        /// poll the link that is going.</summary>
         [TestMethod]
         public void TestClosingALinkBufferReleasesAWaitingRead()
         {
@@ -84,7 +87,7 @@ namespace ShimmerBluetoothTests
             buffer.Close();
             Assert.IsTrue(reader.Join(1000), "the read was still waiting after the buffer closed");
             Assert.IsTrue(took.ElapsedMilliseconds < 500, "the read took " + took.ElapsedMilliseconds + " ms to see the close");
-            Assert.IsInstanceOfType(thrown, typeof(TimeoutException));
+            Assert.IsInstanceOfType(thrown, typeof(IOException));
             buffer.Add(new byte[] { 1 });
             Assert.AreEqual(0, buffer.Count, "a closed buffer takes no more bytes");
         }
@@ -160,6 +163,36 @@ namespace ShimmerBluetoothTests
                 double ticksMs = (delivered[i].RawTicks - delivered[i - 1].RawTicks) / 32.768;
                 Assert.AreEqual(ticksMs, stepMs, 0.001, "the calibrated timeline stepped " + stepMs + " ms where the ticks stepped " + ticksMs + " ms, at packet " + i);
             }
+        }
+
+        /// <summary>
+        /// Disconnecting closes the link's buffer, which wakes the read thread. The closed buffer used to
+        /// read as a timeout, at once and every time, so in the moments before Disconnect stopped the
+        /// thread it counted five and wrote a status poll to the link being torn down. Over BLE that
+        /// write failed where nothing could catch it, and ended the process.
+        /// </summary>
+        [TestMethod]
+        public void TestDisconnectingAnIdleLinkWritesNothingToIt()
+        {
+            var device = new BufferedLinkDevice();
+            var notifications = new List<string>();
+            device.UICallback += (sender, args) =>
+            {
+                var e = (CustomEventArgs)args;
+                if (e.getIndicator() == (int)ShimmerBluetooth.ShimmerIdentifier.MSG_IDENTIFIER_NOTIFICATION_MESSAGE)
+                {
+                    lock (notifications)
+                    {
+                        notifications.Add(e.getObject() as string);
+                    }
+                }
+            };
+            Thread reader = device.StartReading();
+            Thread.Sleep(200); // the read thread is waiting for a byte
+            device.Disconnect();
+            Assert.IsTrue(reader.Join(2000), "the read thread was still running after Disconnect");
+            Assert.AreEqual(0, device.Writes, "writes to the link during Disconnect");
+            CollectionAssert.DoesNotContain(notifications, "Connection lost");
         }
 
         // --- Helpers -------------------------------------------------------------------------------
@@ -302,6 +335,78 @@ namespace ShimmerBluetoothTests
 
             protected override void WriteBytes(byte[] b, int index, int length)
             {
+            }
+        }
+
+        /// <summary>
+        /// A LogAndStream unit, connected and idle, on a link that reads from a <see cref="LinkByteBuffer"/>
+        /// as the BLE link does. Closing the link closes the buffer and then takes a while, as tearing a
+        /// GATT connection down can: the read thread is awake for all of it.
+        /// </summary>
+        sealed class BufferedLinkDevice : ShimmerBluetooth
+        {
+            readonly LinkByteBuffer link = new LinkByteBuffer();
+            volatile bool open = true;
+            public int Writes;
+
+            public BufferedLinkDevice() : base("BufferedLinkDevice")
+            {
+                HardwareVersion = (int)ShimmerVersion.SHIMMER3R;
+                FirmwareIdentifier = FW_IDENTIFIER_LOGANDSTREAM;
+            }
+
+            /// <summary>Starts ReadData on the idle link, as Connect does once the unit is set up.</summary>
+            public Thread StartReading()
+            {
+                StopReading = false;
+                SetState(SHIMMER_STATE_CONNECTED);
+                var reader = new Thread(ReadData);
+                reader.IsBackground = true;
+                reader.Start();
+                return reader;
+            }
+
+            protected override int ReadByte()
+            {
+                return link.Read(ReadTimeout);
+            }
+
+            public override string GetShimmerAddress()
+            {
+                return "BufferedLinkDevice";
+            }
+
+            public override void SetShimmerAddress(string address)
+            {
+            }
+
+            protected override void CloseConnection()
+            {
+                link.Close();
+                Thread.Sleep(50);
+                open = false;
+            }
+
+            protected override void FlushConnection()
+            {
+            }
+
+            protected override void FlushInputConnection()
+            {
+            }
+
+            protected override bool IsConnectionOpen()
+            {
+                return open;
+            }
+
+            protected override void OpenConnection()
+            {
+            }
+
+            protected override void WriteBytes(byte[] b, int index, int length)
+            {
+                Interlocked.Increment(ref Writes);
             }
         }
     }

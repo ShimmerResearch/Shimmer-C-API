@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.IO;
 
 namespace ShimmerAPI.Utilities
 {
@@ -10,7 +11,10 @@ namespace ShimmerAPI.Utilities
     /// "Connection lost") working on the link, and a read never spins.
     /// <para>
     /// <see cref="Close"/> releases a waiting read at once, so the read thread can see the link has
-    /// gone and stop. A closed buffer stays closed: a link makes a new one each time it opens.
+    /// gone and stop. A read of a closed, empty buffer throws IOException, as a serial port's read does
+    /// when the port is closed under it, not TimeoutException: ReadData answers a timeout by polling the
+    /// link for the unit's status, and a link being torn down must not be written to. A closed buffer
+    /// stays closed: a link makes a new one each time it opens.
     /// </para>
     /// </summary>
     public sealed class LinkByteBuffer
@@ -39,14 +43,18 @@ namespace ShimmerAPI.Utilities
         /// <summary>
         /// The next byte, waiting up to <paramref name="timeoutMs"/> for one.
         /// </summary>
-        /// <exception cref="TimeoutException">If none arrived in time, or the buffer is closed and
-        /// empty</exception>
+        /// <exception cref="TimeoutException">If none arrived in time</exception>
+        /// <exception cref="IOException">If the buffer is closed and empty: the link has gone</exception>
         public int Read(int timeoutMs)
         {
             byte b;
             if (bytes.TryTake(out b, timeoutMs))
             {
                 return b;
+            }
+            if (bytes.IsCompleted)
+            {
+                throw new IOException("The link is closed");
             }
             throw new TimeoutException();
         }

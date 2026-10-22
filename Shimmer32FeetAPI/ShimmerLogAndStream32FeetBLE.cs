@@ -43,11 +43,17 @@ namespace ShimmerAPI
 
         protected override void CloseConnection()
         {
-            // Wakes a ReadByte that is waiting, so the read thread stops rather than wait for a byte
-            // that cannot come
-            received.Close();
-            bluetoothDevice.GattServerDisconnected -= Device_GattServerDisconnected;
-            bluetoothDevice.Gatt.Disconnect();
+            try
+            {
+                bluetoothDevice.GattServerDisconnected -= Device_GattServerDisconnected;
+                bluetoothDevice.Gatt.Disconnect();
+            }
+            finally
+            {
+                // Wakes a ReadByte that is waiting, so the read thread stops rather than wait for a
+                // byte that cannot come. Last, so Disconnect stops the thread straight after
+                received.Close();
+            }
         }
 
         protected override void FlushConnection()
@@ -182,11 +188,23 @@ namespace ShimmerAPI
             return received.Read(ReadTimeout);
         }
 
+        /// <summary>
+        /// Writes without waiting for the write to finish. This is async void, so an exception from the
+        /// write would reach no caller and end the process instead: a write to a link that has gone, such
+        /// as ReadData's status poll in the moment Disconnect tears the link down, is logged and dropped.
+        /// </summary>
         protected override async void WriteBytes(byte[] b, int index, int length)
         {
             if (GetState() != SHIMMER_STATE_NONE)
             {
-                await UartTX.WriteValueWithoutResponseAsync(b);
+                try
+                {
+                    await UartTX.WriteValueWithoutResponseAsync(b);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("Radio Plugin 32Feet write failed: " + ex.Message);
+                }
             }
         }
     }
