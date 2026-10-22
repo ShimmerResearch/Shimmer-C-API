@@ -120,8 +120,10 @@ namespace ShimmerApiHil
     public sealed class Link : IDisposable
     {
         /// <summary>The configuration every item streams with, as the Android HIL's: accel only (the
-        /// low-noise accel on a Shimmer3, the LSM6DSV's on a Shimmer3R) at 256 Hz.</summary>
-        public const double RateHz = 256.0;
+        /// low-noise accel on a Shimmer3, the LSM6DSV's on a Shimmer3R) at <see cref="RateHz"/>.</summary>
+        public const double DefaultRateHz = 256.0;
+        /// <summary>The rate every item streams at: <see cref="DefaultRateHz"/>, or the run's --rate.</summary>
+        public static double RateHz = DefaultRateHz;
         const int AccelOnly = (int)ShimmerBluetooth.SensorBitmapShimmer3.SENSOR_A_ACCEL;
         public const int CallTimeoutMs = 10000;
         const int ConnectTimeoutMs = 45000;
@@ -215,7 +217,7 @@ namespace ShimmerApiHil
             long sensors = Device.GetEnabledSensors();
             if (Math.Abs(current - RateHz) < 0.01 && sensors == AccelOnly)
             {
-                c.Say("configuration is already accel only at 256 Hz: not written");
+                c.Say(string.Format(CultureInfo.InvariantCulture, "configuration is already accel only at {0} Hz: not written", RateHz));
                 return;
             }
             c.Say(string.Format(CultureInfo.InvariantCulture, "configuration is {0} Hz with sensors 0x{1:X}: writing accel only at {2} Hz", current, sensors, RateHz));
@@ -228,10 +230,15 @@ namespace ShimmerApiHil
             }
         }
 
+        /// <summary>How long the last <see cref="StartStreaming"/> took, from the call to the API
+        /// streaming: the start command's round trip.</summary>
+        public double LastStartMs;
+
         /// <summary>Starts streaming, and waits until the API is streaming: the start command's ACK
         /// was read.</summary>
         public void StartStreaming(bool andLog = false)
         {
+            var took = Stopwatch.StartNew();
             if (andLog)
             {
                 Call("StartStreamingandLog", () => Device.StartStreamingandLog());
@@ -244,6 +251,8 @@ namespace ShimmerApiHil
             {
                 throw new HilFailure("the API never reached Streaming after the start command (state " + Device.GetStateString() + "): its ACK was not seen");
             }
+            LastStartMs = took.Elapsed.TotalMilliseconds;
+            c.Say(string.Format(CultureInfo.InvariantCulture, "streaming {0:F0} ms after the start command", LastStartMs));
         }
 
         public void StopStreaming(bool andLog = false)

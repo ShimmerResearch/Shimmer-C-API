@@ -45,10 +45,12 @@ It follows the other Shimmer HILs rather than inventing its own conventions:
 .\tools\hil\run-csharp-hil.ps1                                         # everything, on $env:HIL_RIG
 .\tools\hil\run-csharp-hil.ps1 -Item stream.rest -Unit s3r-a -Transport ble
 .\tools\hil\run-csharp-hil.ps1 -List                                   # the items
+.\tools\hil\run-csharp-hil.ps1 -Rate 1024                              # everything at 1024 Hz
 .\tools\hil\run-csharp-hil.ps1 -Report                                 # the release gate's run
 ```
 
-A full run takes about 40 minutes, half of it the two 10-minute `stream.rollover` runs. Each run's
+A full run takes about 45 minutes, nearly half of it the two 10-minute `stream.rollover` runs.
+`-Rate` sets the rate every item streams at (default 256 Hz); the release gate runs at the default. Each run's
 report and logs go to `tools/hil/out/<time>/`, which git ignores:
 
 - `report.json`: the results, in the shimmer-logandstream HIL's structure.
@@ -56,7 +58,7 @@ report and logs go to `tools/hil/out/<time>/`, which git ignores:
 - `logs/<item>-<unit>-<transport>.csv`: every sample the checks judged: raw ticks, arrival time,
   calibrated timestamp and accel.
 
-The suite writes accel only at 256 Hz to each unit (the Android HIL's configuration). It writes it only
+The suite writes accel only at 256 Hz, or `-Rate`, to each unit (the Android HIL's configuration). It writes it only
 when a unit's configuration differs, and leaves the unit that way afterwards.
 
 ## The items
@@ -67,6 +69,7 @@ when a unit's configuration differs, and leaves the unit that way afterwards.
 | `crc.stream` | Switches the link CRC to 1 byte and then 2 bytes with `WriteCRCMode`, and streams 10 s in each | the switch does not take, or a stream fails the checks |
 | `stream.log_and_battery` | Starts streaming and SD logging together (`StartStreamingandLog`), reads the battery three times while streaming, and stops both | a command fails, no battery reply arrives while streaming, or the stream fails the checks |
 | `link.reconnect_loop` | Connects, streams 5 s and disconnects, five times | any cycle fails to connect, stream or disconnect |
+| `link.idle_start` | Connects, leaves the link idle 60 s, then streams 10 s | the API reports the connection lost during the wait, streaming starts over 500 ms after the start command (the shimmer-logandstream HIL's limit), or the stream fails the checks |
 | `stream.rollover` | Streams 10 minutes, across the 512 s wrap of the 3-byte timestamp, on one transport per unit (Classic where it has one) | the checks below, or the API's calibrated timeline steps by over 1 s, runs backwards, or stops matching the device's ticks |
 
 **The stream checks** use the unit's own timestamps, so a loss is a gap in its sequence rather than the
@@ -83,7 +86,8 @@ PC's scheduling. A stream fails when:
 application would. A run can leave behind whatever the API leaves running: a read thread that never
 stops, as the BLE link's did until DEV-1270, or a call that never returned. In a shared process those
 would slow or break every later run, and the failure would land on the wrong item. The process's exit
-takes them with it.
+takes them with it. A run whose process crashes fails, even when the crash comes after its result, as
+an application would have gone down with it; the exception is left in `logs/` as `<run>.crash.txt`.
 
 **Watchdog.** Every API call has 10 s to return (45 s for `Connect`), or the run fails naming the call.
 A run that overruns its item's time budget is stopped. Either way the unit is checked on its next run:

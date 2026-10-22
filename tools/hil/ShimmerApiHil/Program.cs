@@ -20,6 +20,7 @@ namespace ShimmerApiHil
   --transport <t>     only classic or ble (repeatable)
   --out <dir>         where report.json and the logs go (default .\hil-out\<time>)
   --commit <sha>      the commit under test, for the report
+  --rate <Hz>         the sampling rate every item streams at (default 256)
   --list              list the items and exit
   --describe          print the rig's bench and units as JSON and exit (for the runner's checks)
 
@@ -58,6 +59,15 @@ Exit code: 0 when nothing failed, 1 when an item failed, 2 on a usage or bench e
                         case "--transport": onlyTransports.Add(next()); break;
                         case "--out": outDir = next(); break;
                         case "--commit": commit = next(); break;
+                        case "--rate":
+                            double rate;
+                            if (!double.TryParse(next(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out rate)
+                                || rate < 1 || rate > 2048)
+                            {
+                                throw new ArgumentException("--rate needs a sampling rate in Hz, from 1 to 2048");
+                            }
+                            Link.RateHz = rate;
+                            break;
                         case "--describe": describe = true; break;
                         // The parent starts one of these per run (Session.RunChild)
                         case "--run-case": runCase = next(); break;
@@ -149,6 +159,13 @@ Exit code: 0 when nothing failed, 1 when an item failed, 2 on a usage or bench e
                     Console.Error.WriteLine("--run-case needs a known item, one --unit and one --transport");
                     return 2;
                 }
+                string crashFile = Session.CrashFile(outDir, item.Id, onlyUnits[0], onlyTransports[0]);
+                AppDomain.CurrentDomain.UnhandledException += (s, e) =>
+                {
+                    // What is ending the process, for the parent's note
+                    Directory.CreateDirectory(Path.GetDirectoryName(crashFile));
+                    File.WriteAllText(crashFile, e.ExceptionObject.ToString());
+                };
                 new Session(rig, outDir, commit).RunOneHere(item, rig.Units.First(u => u.Name == onlyUnits[0]), onlyTransports[0], suspectWhy);
                 // Whatever the API left running goes with the process
                 Environment.Exit(0);
