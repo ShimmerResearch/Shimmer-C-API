@@ -122,6 +122,11 @@ why it is released without one. The release notes say which.
 
 - **Rest between links.** Windows holds a closed link for a few seconds. The suite rests 8 s between
   runs; set `settle_seconds` in the rig to change it.
+- **One Bluetooth adapter, one stream.** Another stream on the PC's adapter costs samples that are
+  not the API's to lose. On the bench the suite was written on, a Shimmer3 lost 14-37 % over Classic
+  while a Shimmer3R streamed at 1024 Hz beside it. A clear BLE link's longest silence is about 25 ms.
+  A run with silences near 240 ms was on a congested link: it got a third of its samples at 1024 Hz,
+  and all of them once the adapter was quiet. Run it again with the adapter to itself.
 - **A Shimmer3 over Classic** can lose samples on its own side: gaps in its own timestamps, with no
   misalignment or CRC failure in the API. Most of all with a 2-byte link CRC (13-18 % in `crc.stream`,
   where a 1-byte CRC loses little or nothing). The Android HIL sees the same (DEV-1248).
