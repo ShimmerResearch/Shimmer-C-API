@@ -1,0 +1,24 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2011/08/nuspec.xsd">
+  <metadata>
+    <id>BouncyCastle</id>
+    <version>1.8.9</version>
+    <title>Bouncy Castle</title>
+    <authors>Bouncy Castle Project Contributors</authors>
+    <owners>Teoman Soygul</owners>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <licenseUrl>http://www.bouncycastle.org/licence.html</licenseUrl>
+    <projectUrl>http://www.bouncycastle.org/csharp/</projectUrl>
+    <description>The Bouncy Castle Crypto package is a C# implementation of cryptographic algorithms and protocols, it was developed by the Legion of the Bouncy Castle, a registered Australian Charity, with a little help! The Legion, and the latest goings on with this package, can be found at [http://www.bouncycastle.org](http://www.bouncycastle.org). In addition to providing basic cryptography algorithms, the package also provides support for CMS, TSP, X.509 certificate generation and a variety of other standards such as OpenPGP.</description>
+    <summary>Bouncy Castle is a collection of APIs used in cryptography.</summary>
+    <releaseNotes>Defects Fixed
+The TimeStampToken generator is now using PkcsObjectIdentifiers.IdAASigningCertificateV2 for the generating SigningCertificateV2.
+Additional Features and Functionality
+Added CSHAKE digest and KMAC.
+Added support for PKCS#5 Scheme 2 to Pkcs12Store.
+Improved performance for GCM.</releaseNotes>
+    <copyright>Legion of the Bouncy Castle Inc.</copyright>
+    <language>en-US</language>
+    <tags>bouncycastle cryptography encryption security</tags>
+  </metadata>
+</package>
