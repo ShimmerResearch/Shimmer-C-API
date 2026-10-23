@@ -25,11 +25,12 @@ namespace ShimmerAPI
         IDisposable connectionParametersRequest;
         private static bool Debug = false;
         /// <summary>
-        /// 
+        ///
         /// </summary>
         /// <param name="devID"></param>
         /// <param name="bMacAddress"> for example 114f439f84aa</param>
-        /// <param name="hwVersion"></param>
+        /// <param name="hwVersion">The device to look for first. A device that turns out to be the other one,
+        /// Shimmer3 or Shimmer3R, still connects.</param>
         public ShimmerLogAndStream32FeetBLE(String devID, String bMacAddress, ShimmerVersion hwVersion)
           : base(devID)
         {
@@ -51,9 +52,14 @@ namespace ShimmerAPI
         {
             try
             {
-                bluetoothDevice.GattServerDisconnected -= Device_GattServerDisconnected;
-                ReleaseConnectionParameters();
-                bluetoothDevice.Gatt.Disconnect();
+                // None when Windows does not know the address. The read thread closes the link as it
+                // stops, which it now does after a failed connect too (DEV-1314)
+                if (bluetoothDevice != null)
+                {
+                    bluetoothDevice.GattServerDisconnected -= Device_GattServerDisconnected;
+                    ReleaseConnectionParameters();
+                    bluetoothDevice.Gatt.Disconnect();
+                }
             }
             finally
             {
@@ -97,57 +103,49 @@ namespace ShimmerAPI
                 // A closed buffer stays closed, and a previous link's bytes are not this link's
                 received = new LinkByteBuffer();
                 bluetoothDevice = BluetoothDevice.FromIdAsync(macAddress).GetAwaiter().GetResult();
+                if (bluetoothDevice == null)
+                {
+                    Console.WriteLine("Radio Plugin 32Feet: Windows knows no BLE device " + macAddress);
+                    ConnectFail();
+                    return;
+                }
                 bluetoothDevice.Gatt.ConnectAsync().GetAwaiter().GetResult();
-                if (HardwareVersion == (int)ShimmerVersion.SHIMMER3)
-                {
-                    RequestShortConnectionInterval();
-                }
                 Console.WriteLine("current mtu value " + bluetoothDevice.Gatt.Mtu);
-                BluetoothUuid TxID = BluetoothUuid.FromGuid(new Guid("49535343-8841-43f4-a8d4-ecbe34729bb3"));
-                BluetoothUuid RxID = BluetoothUuid.FromGuid(new Guid("49535343-1e4d-4bd9-ba61-23c647249616"));
-                BluetoothUuid ServiceID = BluetoothUuid.FromGuid(new Guid("49535343-fe7d-4ae5-8fa9-9fafd205e455"));
 
-                if (HardwareVersion == (int)ShimmerVersion.SHIMMER3R)
-                {
-                    TxID = BluetoothUuid.FromGuid(new Guid("65333333-A115-11E2-9E9A-0800200CA102"));
-                    RxID = BluetoothUuid.FromGuid(new Guid("65333333-A115-11E2-9E9A-0800200CA101"));
-                    ServiceID = BluetoothUuid.FromGuid(new Guid("65333333-A115-11E2-9E9A-0800200CA100"));
-                }
-                else if (HardwareVersion == (int)ShimmerVersion.SHIMMER3)
-                {
-                    TxID = BluetoothUuid.FromGuid(new Guid("49535343-8841-43f4-a8d4-ecbe34729bb3"));
-                    RxID = BluetoothUuid.FromGuid(new Guid("49535343-1e4d-4bd9-ba61-23c647249616"));
-                    ServiceID = BluetoothUuid.FromGuid(new Guid("49535343-fe7d-4ae5-8fa9-9fafd205e455"));
-                }
-
-
-                ServiceTXRX = bluetoothDevice.Gatt.GetPrimaryServiceAsync(ServiceID).GetAwaiter().GetResult();
-                if (ServiceTXRX != null)
-                {
-                    UartTX = ServiceTXRX.GetCharacteristicAsync(TxID).GetAwaiter().GetResult();
-                    if (UartTX == null)
-                    {
-                        Console.WriteLine("UARTTX null");
-                        ConnectFail();
-                        return;
-                    }
-                    UartRX = ServiceTXRX.GetCharacteristicAsync(RxID).GetAwaiter().GetResult();
-                    if (UartRX == null)
-                    {
-                        Console.WriteLine("UARTRX null");
-                        ConnectFail();
-                        return;
-                    }
-                    UartRX.CharacteristicValueChanged += Gc_ValueChanged;
-                    UartRX.StartNotificationsAsync().GetAwaiter().GetResult();
-                    bluetoothDevice.GattServerDisconnected += Device_GattServerDisconnected;
-                    Console.WriteLine("current mtu value" + bluetoothDevice.Gatt.Mtu);
-                } else
+                // The version given only says which device's service to ask for first. A Shimmer3 given
+                // as a Shimmer3R, as Shimmer Capture gives every BLE address, has the other one (DEV-1314).
+                // The connect sequence then reads the real version from the device.
+                int otherVersion = HardwareVersion == (int)ShimmerVersion.SHIMMER3R ? (int)ShimmerVersion.SHIMMER3 : (int)ShimmerVersion.SHIMMER3R;
+                BluetoothUuid TxID, RxID;
+                if (!FindUartService(HardwareVersion, out TxID, out RxID) && !FindUartService(otherVersion, out TxID, out RxID))
                 {
                     Console.WriteLine("Service TXRX null");
                     ConnectFail();
                     return;
                 }
+                if (HardwareVersion == (int)ShimmerVersion.SHIMMER3)
+                {
+                    RequestShortConnectionInterval();
+                }
+
+                UartTX = ServiceTXRX.GetCharacteristicAsync(TxID).GetAwaiter().GetResult();
+                if (UartTX == null)
+                {
+                    Console.WriteLine("UARTTX null");
+                    ConnectFail();
+                    return;
+                }
+                UartRX = ServiceTXRX.GetCharacteristicAsync(RxID).GetAwaiter().GetResult();
+                if (UartRX == null)
+                {
+                    Console.WriteLine("UARTRX null");
+                    ConnectFail();
+                    return;
+                }
+                UartRX.CharacteristicValueChanged += Gc_ValueChanged;
+                UartRX.StartNotificationsAsync().GetAwaiter().GetResult();
+                bluetoothDevice.GattServerDisconnected += Device_GattServerDisconnected;
+                Console.WriteLine("current mtu value" + bluetoothDevice.Gatt.Mtu);
             }
             catch (Exception ex)
             {
@@ -159,6 +157,27 @@ namespace ShimmerAPI
                 }
                 Console.WriteLine("Radio Plugin 32Feet Exception " + ex.Message);
             }
+        }
+
+        /// <summary>
+        /// Asks the connected device for the given device's UART service: a Shimmer3's RN4678 service or
+        /// a Shimmer3R's. If it has it, this link takes that service, its characteristics and that
+        /// hardware version. Any version but a Shimmer3R's asks for a Shimmer3's.
+        /// </summary>
+        private bool FindUartService(int hardwareVersion, out BluetoothUuid txID, out BluetoothUuid rxID)
+        {
+            bool shimmer3R = hardwareVersion == (int)ShimmerVersion.SHIMMER3R;
+            BluetoothUuid serviceID = BluetoothUuid.FromGuid(new Guid(shimmer3R ? "65333333-A115-11E2-9E9A-0800200CA100" : "49535343-fe7d-4ae5-8fa9-9fafd205e455"));
+            txID = BluetoothUuid.FromGuid(new Guid(shimmer3R ? "65333333-A115-11E2-9E9A-0800200CA102" : "49535343-8841-43f4-a8d4-ecbe34729bb3"));
+            rxID = BluetoothUuid.FromGuid(new Guid(shimmer3R ? "65333333-A115-11E2-9E9A-0800200CA101" : "49535343-1e4d-4bd9-ba61-23c647249616"));
+            GattService service = bluetoothDevice.Gatt.GetPrimaryServiceAsync(serviceID).GetAwaiter().GetResult();
+            if (service == null)
+            {
+                return false;
+            }
+            ServiceTXRX = service;
+            HardwareVersion = shimmer3R ? (int)ShimmerVersion.SHIMMER3R : (int)ShimmerVersion.SHIMMER3;
+            return true;
         }
 
         /// <summary>
