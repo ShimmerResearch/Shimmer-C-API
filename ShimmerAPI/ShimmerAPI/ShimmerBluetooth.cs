@@ -134,9 +134,15 @@ namespace ShimmerAPI
         protected String FirmwareVersionFullName;
         protected List<byte> ListofSensorChannels = new List<byte>();
         protected Boolean Orientation3DEnabled = false;
+        /// <summary>
+        /// Set from derived-sensor bit 29 whenever the device's derived-sensor bytes are read
+        /// (connecting, or an SD file's header), as the Java driver does, and overridable with
+        /// <see cref="SetGyroOnTheFlyCalibration(bool)"/>.
+        /// </summary>
         protected Boolean EnableGyroOnTheFlyCalibration = false;
-        protected int ListSizeGyroOnTheFly = 100;
-        protected double ThresholdGyroOnTheFly = 1.2;
+        /// <summary>A window length the caller asked for; 0 means Java's round(sampling rate).</summary>
+        protected int GyroOnTheFlyWindowSizeOverride = 0;
+        protected GyroOnTheFlyCalibration GyroOnTheFlyCal = new GyroOnTheFlyCalibration();
         protected int AccelRange;
         protected int GyroRange;
         protected int PressureResolution;
@@ -279,12 +285,6 @@ namespace ShimmerAPI
         protected int SetEnabledSensors = (int)SensorBitmapShimmer2.SENSOR_ACCEL;
         protected int ChipID;
         protected int CompatibilityCode = 0;
-        protected List<double> GyroXCalList = new List<double>();
-        protected List<double> GyroYCalList = new List<double>();
-        protected List<double> GyroZCalList = new List<double>();
-        protected List<double> GyroXRawList = new List<double>();
-        protected List<double> GyroYRawList = new List<double>();
-        protected List<double> GyroZRawList = new List<double>();
 
         protected GradDes3DOrientation OrientationAlgo;
 
@@ -563,6 +563,9 @@ namespace ShimmerAPI
             SET_BAUD_RATE_COMMAND = 0x6A,
             BAUD_RATE_COMMAND_RESPONSE = 0X6B,
             GET_BAUD_RATE_COMMAND = 0X6C,
+            SET_DERIVED_CHANNEL_BYTES_COMMAND = 0x6D,
+            DERIVED_CHANNEL_BYTES_RESPONSE = 0x6E,
+            GET_DERIVED_CHANNEL_BYTES_COMMAND = 0x6F,
             DETECT_EXPANSION_BOARD_RESPONSE = 0X65,
             GET_EXPANSION_BOARD_COMMAND = 0x66,
             VBATT_RESPONSE = 0x94,
@@ -4127,34 +4130,7 @@ namespace ShimmerAPI
                     gyroscope[1] = datatemp[1] * Math.PI / 180;
                     gyroscope[2] = datatemp[2] * Math.PI / 180;
 
-                    if (EnableGyroOnTheFlyCalibration)
-                    {
-                        GyroXRawList.Add(newPacket[iGyroX]);
-                        GyroYRawList.Add(newPacket[iGyroY]);
-                        GyroZRawList.Add(newPacket[iGyroZ]);
-                        if (GyroXRawList.Count > ListSizeGyroOnTheFly)
-                        {
-                            GyroXRawList.RemoveAt(0);
-                            GyroYRawList.RemoveAt(0);
-                            GyroZRawList.RemoveAt(0);
-                        }
-                        GyroXCalList.Add(datatemp[0]);
-                        GyroYCalList.Add(datatemp[1]);
-                        GyroZCalList.Add(datatemp[2]);
-                        if (GyroXCalList.Count > ListSizeGyroOnTheFly)
-                        {
-                            GyroXCalList.RemoveAt(0);
-                            GyroYCalList.RemoveAt(0);
-                            GyroZCalList.RemoveAt(0);
-
-                            if (GetStandardDeviation(GyroXCalList) < ThresholdGyroOnTheFly && GetStandardDeviation(GyroYCalList) < ThresholdGyroOnTheFly && GetStandardDeviation(GyroZCalList) < ThresholdGyroOnTheFly)
-                            {
-                                OffsetVectorGyro[0, 0] = GyroXRawList.Average();
-                                OffsetVectorGyro[1, 0] = GyroYRawList.Average();
-                                OffsetVectorGyro[2, 0] = GyroZRawList.Average();
-                            }
-                        }
-                    }
+                    UpdateGyroOnTheFlyCalibration(datatemp, new double[3] { newPacket[iGyroX], newPacket[iGyroY], newPacket[iGyroZ] });
                 }
                 if (((EnabledSensors & (int)SensorBitmapShimmer3.SENSOR_MAG) > 0))
                 {
@@ -4776,34 +4752,7 @@ namespace ShimmerAPI
                     gyroscope[1] = datatemp[1] * Math.PI / 180;
                     gyroscope[2] = datatemp[2] * Math.PI / 180;
 
-                    if (EnableGyroOnTheFlyCalibration)
-                    {
-                        GyroXRawList.Add(newPacket[iGyroX]);
-                        GyroYRawList.Add(newPacket[iGyroY]);
-                        GyroZRawList.Add(newPacket[iGyroZ]);
-                        if (GyroXRawList.Count > ListSizeGyroOnTheFly)
-                        {
-                            GyroXRawList.RemoveAt(0);
-                            GyroYRawList.RemoveAt(0);
-                            GyroZRawList.RemoveAt(0);
-                        }
-                        GyroXCalList.Add(datatemp[0]);
-                        GyroYCalList.Add(datatemp[1]);
-                        GyroZCalList.Add(datatemp[2]);
-                        if (GyroXCalList.Count > ListSizeGyroOnTheFly)
-                        {
-                            GyroXCalList.RemoveAt(0);
-                            GyroYCalList.RemoveAt(0);
-                            GyroZCalList.RemoveAt(0);
-
-                            if (GetStandardDeviation(GyroXCalList) < ThresholdGyroOnTheFly && GetStandardDeviation(GyroYCalList) < ThresholdGyroOnTheFly && GetStandardDeviation(GyroZCalList) < ThresholdGyroOnTheFly)
-                            {
-                                OffsetVectorGyro[0, 0] = GyroXRawList.Average();
-                                OffsetVectorGyro[1, 0] = GyroYRawList.Average();
-                                OffsetVectorGyro[2, 0] = GyroZRawList.Average();
-                            }
-                        }
-                    }
+                    UpdateGyroOnTheFlyCalibration(datatemp, new double[3] { newPacket[iGyroX], newPacket[iGyroY], newPacket[iGyroZ] });
                 }
                 if (((EnabledSensors & (int)SensorBitmapShimmer2.SENSOR_MAG) > 0))
                 {
@@ -5713,6 +5662,11 @@ namespace ShimmerAPI
                     PacketReceptionRate = 100;
                     KeepObjectCluster = null; //This is important and is required!
                     OrientationAlgo = null;
+                    if (EnableGyroOnTheFlyCalibration)
+                    {
+                        // As the Java driver's initializeAlgorithms: sized for this stream's rate, window kept.
+                        SetGyroOnTheFlyWindowSize();
+                    }
                     mWaitingForStartStreamingACK = true;
                     UnalignedBytesReceived = new List<Byte>();
                     WriteBytes(new byte[1] { (byte)PacketTypeShimmer2.START_STREAMING_COMMAND }, 0, 1);
@@ -6040,13 +5994,80 @@ namespace ShimmerAPI
             return Orientation3DEnabled;
         }
 
+        /// <summary>
+        /// Turns the gyro on-the-fly offset calibration on or off, with the Java driver's window
+        /// (round(sampling rate) samples) and threshold (1.2 deg/s). It is turned on without
+        /// this whenever the device's configuration has derived-sensor bit 29 set, and this
+        /// overrides that until the configuration is next read.
+        /// </summary>
+        public void SetGyroOnTheFlyCalibration(Boolean enable)
+        {
+            SetGyroOnTheFlyCalibration(enable, 0, GyroOnTheFlyCalibration.DEFAULT_THRESHOLD);
+        }
+
+        /// <summary>
+        /// As <see cref="SetGyroOnTheFlyCalibration(bool)"/>, with a window of
+        /// <paramref name="bufferSize"/> samples (0 for round(sampling rate)) and a threshold in
+        /// deg/s. Anything but 0 and 1.2 no longer matches Consensys.
+        /// </summary>
         public void SetGyroOnTheFlyCalibration(Boolean enable, int bufferSize, double threshold)
         {
             EnableGyroOnTheFlyCalibration = enable;
             if (enable)
             {
-                ListSizeGyroOnTheFly = bufferSize;
-                ThresholdGyroOnTheFly = threshold;
+                GyroOnTheFlyWindowSizeOverride = Math.Max(0, bufferSize);
+                GyroOnTheFlyCal.Threshold = threshold;
+                SetGyroOnTheFlyWindowSize();
+            }
+        }
+
+        /// <summary>
+        /// Takes the on-the-fly calibration's on/off state from derived-sensor bit 29, as the
+        /// Java driver does, and sizes its window if it is on.
+        /// </summary>
+        protected void SetDerivedSensors(long derivedSensors)
+        {
+            DerivedSensors = derivedSensors;
+            EnableGyroOnTheFlyCalibration = GyroOnTheFlyCalibration.IsEnabledInDerivedSensors(derivedSensors);
+            if (EnableGyroOnTheFlyCalibration)
+            {
+                SetGyroOnTheFlyWindowSize();
+            }
+        }
+
+        /// <summary>The derived-sensor bitmap last read from the device or an SD file header.</summary>
+        public long GetDerivedSensors()
+        {
+            return DerivedSensors;
+        }
+
+        /// <summary>
+        /// OnTheFlyGyroOffsetCal.setBufferSizeFromSamplingRate: the window is round(fs) samples,
+        /// unless a caller asked for another size.
+        /// </summary>
+        protected void SetGyroOnTheFlyWindowSize()
+        {
+            GyroOnTheFlyCal.SetWindowSize(GyroOnTheFlyWindowSizeOverride > 0
+                ? GyroOnTheFlyWindowSizeOverride
+                : GyroOnTheFlyCalibration.WindowSizeFromSamplingRate(SamplingRate));
+        }
+
+        /// <summary>
+        /// GyroOnTheFlyCalModule: feeds one sample to the estimator and, when it has a new
+        /// offset, puts it in force from the next sample on.
+        /// </summary>
+        protected void UpdateGyroOnTheFlyCalibration(double[] calibrated, double[] raw)
+        {
+            if (!EnableGyroOnTheFlyCalibration)
+            {
+                return;
+            }
+            double[] offset = GyroOnTheFlyCal.Update(calibrated, raw);
+            if (offset != null)
+            {
+                OffsetVectorGyro[0, 0] = offset[0];
+                OffsetVectorGyro[1, 0] = offset[1];
+                OffsetVectorGyro[2, 0] = offset[2];
             }
         }
 
@@ -8017,16 +8038,10 @@ namespace ShimmerAPI
             return calibratedData;
         }
 
+        /// <summary>The sample standard deviation, as the Java driver's Commons Math computes it.</summary>
         protected double GetStandardDeviation(List<double> doubleList)
         {
-            double average = doubleList.Average();
-            double sumOfDerivation = 0;
-            foreach (double value in doubleList)
-            {
-                sumOfDerivation += (value) * (value);
-            }
-            double sumOfDerivationAverage = sumOfDerivation / doubleList.Count;
-            return Math.Sqrt(sumOfDerivationAverage - (average * average));
+            return GyroOnTheFlyCalibration.StandardDeviation(doubleList);
         }
 
         public void ClearPacketBuffer()

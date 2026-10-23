@@ -55,7 +55,25 @@ namespace ShimmerBluetoothTests
             {
                 Assert.Fail("mDevice is null");
             }
-            
+
+        }
+
+        /// <summary>
+        /// Connecting reads the derived-channel bytes, and derived-sensor bit 29 (byte 3, bit 5)
+        /// turns the gyro on-the-fly offset calibration on, as it does in the Java driver.
+        /// </summary>
+        [TestMethod]
+        public void Test002_derivedBit29EnablesGyroOnTheFlyCalibration()
+        {
+            mDevice.DerivedChannelBytes = new byte[] { 0, 0, 0, 0x20, 0, 0, 0, 0 };
+            mDevice.StartConnectThread();
+            for (int i = 0; i < 600 && !mDevice.IsConnected(); i++)
+            {
+                Thread.Sleep(100);
+            }
+            Assert.IsTrue(mDevice.IsConnected());
+            Assert.AreEqual(1L << 29, mDevice.GetDerivedSensors());
+            Assert.IsTrue(mDevice.IsGyroOnTheFlyCalEnabled());
         }
 
     }

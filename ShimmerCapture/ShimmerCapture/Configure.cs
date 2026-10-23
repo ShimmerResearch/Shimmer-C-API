@@ -1483,7 +1483,7 @@ namespace ShimmerAPI
             PControlForm.shimmer.SetLowPowerAccel(checkBoxLowPowerAccel.Checked);
             PControlForm.shimmer.SetLowPowerGyro(checkBoxLowPowerGyro.Checked);
             PControlForm.shimmer.Set3DOrientation(checkBox3DOrientation.Checked);
-            PControlForm.shimmer.SetGyroOnTheFlyCalibration(checkBoxGyroOnTheFly.Checked, 100, 1.2);
+            PControlForm.shimmer.SetGyroOnTheFlyCalibration(checkBoxGyroOnTheFly.Checked);
             PControlForm.shimmer.WriteAccelRange(comboBoxAccelRange.SelectedIndex);
             PControlForm.shimmer.WriteGSRRange(comboBoxGSRRange.SelectedIndex);
 

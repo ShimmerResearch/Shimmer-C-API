@@ -74,6 +74,8 @@
     <Compile Include="ShimmerReadDataPacketTest.cs" />
     <Compile Include="ShimmerStreamReadTest.cs" />
     <Compile Include="HilStreamChecksTest.cs" />
+    <Compile Include="GyroOnTheFlyCalibrationTest.cs" />
+    <Compile Include="GyroOnTheFlyVectors.cs" />
     <Compile Include="..\..\tools\hil\ShimmerApiHil\StreamChecks.cs">
       <Link>Hil\StreamChecks.cs</Link>
     </Compile>

@@ -14,6 +14,8 @@ namespace ShimmerAPI.Simulators
         TaskCompletionSource<bool> mConnectTask = new TaskCompletionSource<bool>();
         public bool isConnectionOpen = false;
         protected BlockingCollection<byte> mBuffer = new BlockingCollection<byte>(1000); // Fixed size 1000
+        /// <summary>The eight bytes the simulated device answers GET_DERIVED_CHANNEL_BYTES with.</summary>
+        public byte[] DerivedChannelBytes = new byte[8];
 
 
         public ShimmerLogAndStreamS3Simulator(string devID, string bComPort)
@@ -206,6 +208,18 @@ namespace ShimmerAPI.Simulators
                 mBuffer.Add((byte)0x71);
                 mBuffer.Add((byte)0x21);
                 mBuffer.Add((byte)0xF4);
+            }
+            else if (buffer[0] == (byte)PacketTypeShimmer3.GET_DERIVED_CHANNEL_BYTES_COMMAND)
+            {
+                byte[] response = new byte[1 + DerivedChannelBytes.Length];
+                response[0] = (byte)PacketTypeShimmer3.DERIVED_CHANNEL_BYTES_RESPONSE;
+                Array.Copy(DerivedChannelBytes, 0, response, 1, DerivedChannelBytes.Length);
+                mBuffer.Add((byte)0xff);
+                foreach (byte byteValue in response)
+                {
+                    mBuffer.Add(byteValue);
+                }
+                mBuffer.Add(ShimmerUartCrcCalc(response, response.Length)[0]);
             }
             else if (buffer[0] == (byte)PacketTypeShimmer2.INQUIRY_COMMAND)
             {

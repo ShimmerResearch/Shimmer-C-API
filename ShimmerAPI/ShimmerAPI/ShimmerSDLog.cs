@@ -257,6 +257,11 @@ public void ProcessSDLogHeader(byte[] byteArrayInfo)
 
         ParseEnabledDerivedSensorsForMaps(byteArrayInfo);
 
+        // Derived-sensor bit 29 turns on the gyro on-the-fly offset calibration, which the
+        // Java driver runs on SD import as over Bluetooth, starting afresh for each file.
+        GyroOnTheFlyCal.Reset();
+        SetDerivedSensors(DerivedSensors);
+
         ExpansionBoardId = byteArrayInfo[214];
         ExpansionBoardRev = byteArrayInfo[215];
         ExpansionBoardRevSpecial = byteArrayInfo[216];
