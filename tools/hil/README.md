@@ -137,5 +137,7 @@ why it is released without one. The release notes say which.
 - **A Shimmer3 over BLE.** Both showed on the bench the suite was written on:
   - LogAndStream v1.1.5 with an RN4678 can stop answering after a configuration write over BLE. The
     suite writes the configuration only when it differs, which keeps BLE runs clear of that (DEV-1246).
-  - At 256 Hz it loses samples in bursts. The API does not ask Windows for a short connection interval,
-    which this radio needs for that rate (DEV-1272).
+  - At 256 Hz it lost 2-5 % of its samples in bursts, with silences near 240 ms: Windows' default
+    connection interval is too long for this radio. The API now asks Windows 11 for its short interval
+    for a Shimmer3, which brought the loss to nothing (DEV-1272). Windows 10 has no such request, so
+    there the loss remains.
