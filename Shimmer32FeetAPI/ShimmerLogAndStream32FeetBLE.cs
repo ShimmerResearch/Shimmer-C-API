@@ -4,6 +4,7 @@ using InTheHand.Bluetooth;
 using System.Collections.Concurrent;
 using System.Threading;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using ShimmerAPI.Utilities;
 
 namespace ShimmerAPI
@@ -17,6 +18,11 @@ namespace ShimmerAPI
         protected String macAddress { get; set; }
         /// <summary>What the notifications delivered, for ReadByte. A new one for each link: see OpenConnection.</summary>
         LinkByteBuffer received = new LinkByteBuffer();
+        /// <summary>
+        /// Holds Windows' short connection interval for this link: once released, the link goes back to
+        /// Windows' default. Kept as an IDisposable, so a Windows without the request never loads its type.
+        /// </summary>
+        IDisposable connectionParametersRequest;
         private static bool Debug = false;
         /// <summary>
         /// 
@@ -46,6 +52,7 @@ namespace ShimmerAPI
             try
             {
                 bluetoothDevice.GattServerDisconnected -= Device_GattServerDisconnected;
+                ReleaseConnectionParameters();
                 bluetoothDevice.Gatt.Disconnect();
             }
             finally
@@ -91,6 +98,10 @@ namespace ShimmerAPI
                 received = new LinkByteBuffer();
                 bluetoothDevice = BluetoothDevice.FromIdAsync(macAddress).GetAwaiter().GetResult();
                 bluetoothDevice.Gatt.ConnectAsync().GetAwaiter().GetResult();
+                if (HardwareVersion == (int)ShimmerVersion.SHIMMER3)
+                {
+                    RequestShortConnectionInterval();
+                }
                 Console.WriteLine("current mtu value " + bluetoothDevice.Gatt.Mtu);
                 BluetoothUuid TxID = BluetoothUuid.FromGuid(new Guid("49535343-8841-43f4-a8d4-ecbe34729bb3"));
                 BluetoothUuid RxID = BluetoothUuid.FromGuid(new Guid("49535343-1e4d-4bd9-ba61-23c647249616"));
@@ -143,9 +154,61 @@ namespace ShimmerAPI
                 if (bluetoothDevice != null)
                 {
                     bluetoothDevice.GattServerDisconnected -= Device_GattServerDisconnected;
+                    ReleaseConnectionParameters();
                     bluetoothDevice.Gatt.Disconnect();
                 }
                 Console.WriteLine("Radio Plugin 32Feet Exception " + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// Asks Windows for its short connection interval (ThroughputOptimized), which Windows 11 allows.
+        /// On Windows' default interval a Shimmer3's RN4678 carries less than a 256 Hz stream needs, so it
+        /// drops samples in bursts (DEV-1272). Where Windows lacks the request or refuses it, the link keeps
+        /// the default interval. A Shimmer3R is not asked: it gets a better link on its own, and the
+        /// request raised its longest silence from about 23 ms to 45-50 ms.
+        /// </summary>
+        private void RequestShortConnectionInterval()
+        {
+            try
+            {
+                if (!Windows.Foundation.Metadata.ApiInformation.IsMethodPresent("Windows.Devices.Bluetooth.BluetoothLEDevice", "RequestPreferredConnectionParameters"))
+                {
+                    Console.WriteLine("Radio Plugin 32Feet: this Windows cannot request a connection interval");
+                    return;
+                }
+                RequestThroughputOptimizedConnectionParameters();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("Radio Plugin 32Feet connection interval request failed: " + ex.Message);
+            }
+        }
+
+        /// <summary>Only called where Windows has the request, so its types load only there.</summary>
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private void RequestThroughputOptimizedConnectionParameters()
+        {
+            Windows.Devices.Bluetooth.BluetoothLEDevice device = bluetoothDevice;
+            var request = device.RequestPreferredConnectionParameters(Windows.Devices.Bluetooth.BluetoothLEPreferredConnectionParameters.ThroughputOptimized);
+            connectionParametersRequest = request;
+            Console.WriteLine("Radio Plugin 32Feet connection interval request: " + request.Status);
+        }
+
+        private void ReleaseConnectionParameters()
+        {
+            IDisposable request = connectionParametersRequest;
+            connectionParametersRequest = null;
+            if (request != null)
+            {
+                try
+                {
+                    request.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("Radio Plugin 32Feet connection interval release failed: " + ex.Message);
+                }
             }
         }
 
