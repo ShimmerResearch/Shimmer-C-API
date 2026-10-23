@@ -745,23 +745,10 @@ namespace ShimmerAPI
             status_text = "Acquiring Calibration settings...";
             //PControlForm.status_text = "Acquiring Calibration settings...";
             //worker.ReportProgress(40, status_text);
-            if (HardwareVersion == (int)ShimmerBluetooth.ShimmerVersion.SHIMMER3R)
-            {
-                //ReadCalibDump();
-                ReadCalibrationParameters("All");
-            }
-            else
-            {
-                var t = this.GetType();          
-                if (HardwareVersion == (int)ShimmerBluetooth.ShimmerVersion.SHIMMER3 && t.Name.Equals("ShimmerLogAndStream32FeetBLE")) // temporary fix to get shimmer3 BLE working, not recommended for use
-                {
-                    ReadCalibDump();
-                }
-                else
-                {
-                    ReadCalibrationParameters("All");
-                }
-            }
+            //The same on every link. A Shimmer3 over BLE used to read the calibration dump instead, which
+            //sets none of the calibration the stream is decoded with, so its accel, gyro and mag decoded
+            //with the Shimmer2 starting values (DEV-1271).
+            ReadCalibrationParameters("All");
 
             status_text = "Acquiring EXG1 configure settings...";
             newEventArgs = new CustomEventArgs((int)ShimmerIdentifier.MSG_IDENTIFIER_NOTIFICATION_MESSAGE, (object)status_text);

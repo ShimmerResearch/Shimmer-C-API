@@ -14,6 +14,11 @@ namespace ShimmerAPI.Simulators
         TaskCompletionSource<bool> mConnectTask = new TaskCompletionSource<bool>();
         public bool isConnectionOpen = false;
         protected BlockingCollection<byte> mBuffer = new BlockingCollection<byte>(1000); // Fixed size 1000
+        /// <summary>
+        /// The calibration blocks GET_ALL_CALIBRATION_COMMAND is answered with: a Shimmer3 sends four.
+        /// Null leaves the command unanswered.
+        /// </summary>
+        public byte[] AllCalibrationBlocks;
 
 
         public ShimmerLogAndStreamS3Simulator(string devID, string bComPort)
@@ -264,6 +269,15 @@ namespace ShimmerAPI.Simulators
                         mBuffer.Add(byteValue);
                     }
                     mBuffer.Add((byte)0x6A);
+                }
+            }
+            else if (buffer[0] == (byte)PacketTypeShimmer2.GET_ALL_CALIBRATION_COMMAND && AllCalibrationBlocks != null)
+            {
+                mBuffer.Add((byte)0xff);
+                mBuffer.Add((byte)PacketTypeShimmer2.ALL_CALIBRATION_RESPONSE);
+                foreach (byte byteValue in AllCalibrationBlocks)
+                {
+                    mBuffer.Add(byteValue);
                 }
             }
             else
