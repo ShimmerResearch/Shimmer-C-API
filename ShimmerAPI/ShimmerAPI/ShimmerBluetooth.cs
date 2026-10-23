@@ -1099,6 +1099,13 @@ namespace ShimmerAPI
                             }
                         }
                     }
+                    else
+                    {
+                        // The link did not open. A BLE link reports that by staying closed rather than by
+                        // throwing, so stop the read thread as for any failed connect, or it reads the
+                        // closed link for the life of the process (DEV-1314).
+                        throw new System.IO.IOException("The link did not open");
+                    }
                 }
                 catch
                 {

@@ -61,6 +61,7 @@
     <Compile Include="ShimmerAllCalibrationTest.cs" />
     <Compile Include="ShimmerBareAckCrcTest.cs" />
     <Compile Include="ShimmerBluetoothReadData.cs" />
+    <Compile Include="ShimmerFailedConnectTest.cs" />
     <Compile Include="ShimmerCrcFirmwareTest.cs" />
     <Compile Include="ShimmerCrcStatusPushTest.cs" />
     <Compile Include="ShimmerCrcSwitchTest.cs" />
