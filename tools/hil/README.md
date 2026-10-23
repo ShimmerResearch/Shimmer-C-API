@@ -134,10 +134,8 @@ why it is released without one. The release notes say which.
 - **A Shimmer3 over Classic** can lose samples on its own side: gaps in its own timestamps, with no
   misalignment or CRC failure in the API. Most of all with a 2-byte link CRC (13-18 % in `crc.stream`,
   where a 1-byte CRC loses little or nothing). The Android HIL sees the same (DEV-1248).
-- **A Shimmer3 over BLE.** These all showed on the bench the suite was written on:
+- **A Shimmer3 over BLE.** Both showed on the bench the suite was written on:
   - LogAndStream v1.1.5 with an RN4678 can stop answering after a configuration write over BLE. The
     suite writes the configuration only when it differs, which keeps BLE runs clear of that (DEV-1246).
-  - The API decodes its accel through the calibration dump, which `ShimmerLogAndStream` marks unfinished,
-    and reads about 1.85 times what the same unit gives over Classic (DEV-1271).
   - At 256 Hz it loses samples in bursts. The API does not ask Windows for a short connection interval,
     which this radio needs for that rate (DEV-1272).

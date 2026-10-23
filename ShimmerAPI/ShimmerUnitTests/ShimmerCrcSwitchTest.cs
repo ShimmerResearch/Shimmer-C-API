@@ -229,7 +229,8 @@ namespace ShimmerBluetoothTests
     /// replies, and a read with nothing to read times out after ReadTimeout, as a serial port's does.
     /// It answers GET_SAMPLING_RATE_COMMAND with the sampling rate and every other command with an ACK,
     /// and after START_STREAMING_COMMAND it sends a data packet every 20 ms. A command in Refuse is
-    /// answered with a NACK instead, and not acted on.
+    /// answered with a NACK instead, and not acted on. With AllCalibrationBlocks set, it answers
+    /// GET_ALL_CALIBRATION_COMMAND with them.
     /// </summary>
     class CrcLinkDevice : CrcFirmwareDevice
     {
@@ -245,6 +246,8 @@ namespace ShimmerBluetoothTests
         /// </summary>
         public readonly HashSet<byte> Refuse = new HashSet<byte>();
         public int SamplingRateTicks = 640;
+        /// <summary>The ALL_CALIBRATION_RESPONSE payload: four blocks from a Shimmer3, six from a Shimmer3R.</summary>
+        public byte[] AllCalibrationBlocks;
         /// <summary>Keeps replies back until ReleaseHeldReplies, as a slow link would.</summary>
         public bool HoldReplies;
         public int PacketsSent;
@@ -337,6 +340,11 @@ namespace ShimmerBluetoothTests
                 reply.Add((byte)PacketTypeShimmer2.SAMPLING_RATE_RESPONSE);
                 reply.Add((byte)(SamplingRateTicks & 0xFF));
                 reply.Add((byte)((SamplingRateTicks >> 8) & 0xFF));
+            }
+            else if (b[index] == (byte)PacketTypeShimmer2.GET_ALL_CALIBRATION_COMMAND && AllCalibrationBlocks != null)
+            {
+                reply.Add((byte)PacketTypeShimmer2.ALL_CALIBRATION_RESPONSE);
+                reply.AddRange(AllCalibrationBlocks);
             }
             Send(reply);
             if (b[index] == (byte)PacketTypeShimmer2.START_STREAMING_COMMAND && streamThread == null)
