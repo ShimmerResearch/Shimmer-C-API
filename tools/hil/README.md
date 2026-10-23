@@ -49,7 +49,7 @@ It follows the other Shimmer HILs rather than inventing its own conventions:
 .\tools\hil\run-csharp-hil.ps1 -Report                                 # the release gate's run
 ```
 
-A full run takes about 45 minutes, nearly half of it the two 10-minute `stream.rollover` runs.
+A full run takes about an hour, a third of it the two 10-minute `stream.rollover` runs.
 `-Rate` sets the rate every item streams at (default 256 Hz); the release gate runs at the default. Each run's
 report and logs go to `tools/hil/out/<time>/`, which git ignores:
 
@@ -70,6 +70,10 @@ when a unit's configuration differs, and leaves the unit that way afterwards.
 | `stream.log_and_battery` | Starts streaming and SD logging together (`StartStreamingandLog`), reads the battery three times while streaming, and stops both | a command fails, no battery reply arrives while streaming, or the stream fails the checks |
 | `link.reconnect_loop` | Connects, streams 5 s and disconnects, five times | any cycle fails to connect, stream or disconnect |
 | `link.idle_start` | Connects, leaves the link idle 60 s, then streams 10 s | the API reports the connection lost during the wait, streaming starts over 500 ms after the start command (the shimmer-logandstream HIL's limit), or the stream fails the checks |
+| `stream.in_stream` | Reads the battery and the SD directory while streaming: three times each on its own, then twice both at once, both written before either reply, as the Java HIL's `inStream` does | a reply does not arrive within 3 s (5 s when the two overlap), the battery reads outside 3.0-4.5 V, or the stream fails the checks |
+| `link.start_on_connected` | Configures the unit on one link, then on a second starts streaming as soon as the API reports Connected, while `Connect()` is still reading the configuration, as an app reacting to the state change would. The Java HIL checks the same on every connect (DEV-1275) | the API never streams, the start or `Connect()` fails, the API reads the configuration wrongly, or the stream fails the checks |
+| `config.sampling_rate` | Writes 51.2, 256 and 512 Hz in turn with `WriteSamplingRate`, streams 5 s at each, then writes the suite's rate back, as the shimmer-logandstream HIL's item of that name does | a write does not take, a stream fails the checks at its rate, or the suite's rate does not go back |
+| `stream.app_threads` | Streams 20 s while three app threads call the API in loops: one reads the battery, one the SD directory, and one queries the API's state and configuration, as the Java HIL's `queueStress` does | a call or the replies stall for 10 s, a call throws, no battery or directory request is answered, or the stream fails the checks. Unanswered requests are counted, not failed |
 | `stream.rollover` | Streams 10 minutes, across the 512 s wrap of the 3-byte timestamp, on one transport per unit (Classic where it has one) | the checks below, or the API's calibrated timeline steps by over 1 s, runs backwards, or stops matching the device's ticks |
 
 **The stream checks** use the unit's own timestamps, so a loss is a gap in its sequence rather than the

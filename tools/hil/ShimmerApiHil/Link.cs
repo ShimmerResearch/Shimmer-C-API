@@ -145,6 +145,18 @@ namespace ShimmerApiHil
             get { return Volatile.Read(ref connectionLost); }
         }
 
+        /// <summary>Run on a thread of its own when the API first reports Connected, while Connect()
+        /// may still be running, as an application reacting to the state change would. See
+        /// <see cref="Open"/>.</summary>
+        Action<Link> onFirstConnected;
+        int firstConnectedFired;
+        Thread firstConnectedThread;
+        /// <summary>What <see cref="onFirstConnected"/> threw, if anything.</summary>
+        public Exception FirstConnectedError;
+        /// <summary>When the API first reported Connected, and when Connect() returned, in the case's
+        /// seconds.</summary>
+        public double ConnectedAt = double.NaN, ConnectReturnedAt = double.NaN;
+
         Link(Case c, ShimmerLogAndStream device)
         {
             this.c = c;
@@ -154,7 +166,9 @@ namespace ShimmerApiHil
 
         /// <summary>Opens a link to the case's unit over its transport, and waits until the API says
         /// it is connected.</summary>
-        public static Link Open(Case c)
+        /// <param name="onFirstConnected">if given, run on its own thread as soon as the API first
+        /// reports Connected. It may leave the API streaming by the time Connect() returns.</param>
+        public static Link Open(Case c, Action<Link> onFirstConnected = null)
         {
             ShimmerLogAndStream device;
             if (c.Transport == "classic")
@@ -173,10 +187,13 @@ namespace ShimmerApiHil
                 device = new ShimmerLogAndStream32FeetBLE(c.Unit.Name, c.Unit.Mac.ToLowerInvariant(), version);
             }
             var link = new Link(c, device);
+            link.onFirstConnected = onFirstConnected;
             try
             {
                 link.Call("Connect", () => device.Connect(), ConnectTimeoutMs);
-                if (device.GetState() != ShimmerBluetooth.SHIMMER_STATE_CONNECTED)
+                link.ConnectReturnedAt = c.Now;
+                bool streamingAlready = onFirstConnected != null && device.GetState() == ShimmerBluetooth.SHIMMER_STATE_STREAMING;
+                if (device.GetState() != ShimmerBluetooth.SHIMMER_STATE_CONNECTED && !streamingAlready)
                 {
                     throw new HilFailure(string.Format("did not connect over {0} (the API's state is {1})", c.Transport, device.GetStateString()));
                 }
@@ -271,11 +288,19 @@ namespace ShimmerApiHil
             }
         }
 
-        /// <summary>Records what the API delivers for the given time, calling <paramref name="during"/>
-        /// once a second with the seconds elapsed.</summary>
-        public StreamChecks.Stream Record(double seconds, Action<int> during = null)
+        /// <summary>Waits for <see cref="onFirstConnected"/> to finish, if it ran.</summary>
+        public bool WaitFirstConnected(int timeoutMs)
         {
-            var stream = new StreamChecks.Stream(RateHz);
+            Thread thread = Volatile.Read(ref firstConnectedThread);
+            return thread == null || thread.Join(timeoutMs);
+        }
+
+        /// <summary>Records what the API delivers for the given time, calling <paramref name="during"/>
+        /// once a second with the seconds elapsed. The stream is judged against
+        /// <paramref name="rateHz"/>, or the run's rate.</summary>
+        public StreamChecks.Stream Record(double seconds, Action<int> during = null, double rateHz = 0)
+        {
+            var stream = new StreamChecks.Stream(rateHz > 0 ? rateHz : RateHz);
             c.Streams.Add(stream);
             lock (gate)
             {
@@ -383,6 +408,26 @@ namespace ShimmerApiHil
                     break;
                 case (int)ShimmerBluetooth.ShimmerIdentifier.MSG_IDENTIFIER_STATE_CHANGE:
                     c.Say("state: " + Device.GetStateString());
+                    if (onFirstConnected != null && Device.GetState() == ShimmerBluetooth.SHIMMER_STATE_CONNECTED
+                        && Interlocked.Exchange(ref firstConnectedFired, 1) == 0)
+                    {
+                        ConnectedAt = c.Now;
+                        var thread = new Thread(() =>
+                        {
+                            try
+                            {
+                                onFirstConnected(this);
+                            }
+                            catch (Exception error)
+                            {
+                                FirstConnectedError = error;
+                            }
+                        });
+                        thread.IsBackground = true;
+                        thread.Name = "hil on first Connected";
+                        Volatile.Write(ref firstConnectedThread, thread);
+                        thread.Start();
+                    }
                     break;
                 case (int)ShimmerBluetooth.ShimmerIdentifier.MSG_IDENTIFIER_NOTIFICATION_MESSAGE:
                     string message = Convert.ToString(e.getObject());
