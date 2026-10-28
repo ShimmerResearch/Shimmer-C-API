@@ -8,12 +8,18 @@ name: PublishNuGet
 # then creates the tag and a GitHub release with generated notes. A release made by hand on
 # GitHub publishes nothing. Recover a failed release with "Re-run failed jobs" on the same run,
 # never a new Run workflow (see AGENTS.md).
+# The update-labview job then waits for nuget.org to list the new ShimmerAPI and starts Update
+# ShimmerAPI (update-shimmerapi.yml) in ShimmerResearch/Shimmer-Labview-API for that version, which
+# rebuilds the LabVIEW wrapper and opens a PR there; merging it publishes the LabVIEW release. It
+# needs the secret LABVIEW_REPO_TOKEN: a fine-grained token for Shimmer-Labview-API with Actions
+# read/write. The packages and tag are out before it starts, so if it fails, fix the cause and
+# "Re-run failed jobs"; that repo's daily check picks the release up on its own anyway.
 # Uses nuget.org trusted publishing: no stored API key. The ShimmerEngineering profile on
 # nuget.org holds a policy trusting this repo, this workflow file and the nuget-release
 # environment, which only master may deploy to. Renaming the file or the environment means
 # updating that policy.
 # Pull requests that touch either package run the build job at the next patch version, with
-# read-only permissions and no publish job.
+# read-only permissions and no publish or update-labview job.
 #
 # Hardware test gate: before releasing, run tools/hil/run-csharp-hil.ps1 -Report on the bench at the
 # commit being released (see tools/hil/README.md). It posts the commit status "csharp-hil". A
@@ -203,3 +209,95 @@ jobs:
         $notes += "`n`n$(if ($env:HIL) { $env:HIL } else { 'No hardware test result' })"
         gh release create "v$env:VERSION" --target $env:GITHUB_SHA --title "Shimmer C# API Rev $env:VERSION" --notes $notes --generate-notes --notes-start-tag $env:PREVIOUS_TAG
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  # Brings the LabVIEW wrapper along, so the release run shows it. Update ShimmerAPI in
+  # Shimmer-Labview-API does the work; this only starts it, for this version.
+  update-labview:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master'
+    needs: [build, publish]
+
+    # PowerShell like the rest of this file, but nothing here needs Windows.
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    # Starts the workflow in Shimmer-Labview-API with LABVIEW_REPO_TOKEN, not this repo's token.
+    permissions: {}
+
+    defaults:
+      run:
+        shell: pwsh
+
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+      LABVIEW_REPO: ShimmerResearch/Shimmer-Labview-API
+      LABVIEW_WORKFLOW: update-shimmerapi.yml
+      HAS_TOKEN: ${{ secrets.LABVIEW_REPO_TOKEN != '' }}
+
+    steps:
+    - name: Check for LABVIEW_REPO_TOKEN
+      if: env.HAS_TOKEN != 'true'
+      run: |
+        Write-Host "::error::Secret LABVIEW_REPO_TOKEN is not set, so the LabVIEW wrapper update cannot be started. Add a fine-grained token for $env:LABVIEW_REPO (Actions: read/write) as a secret of this repo, then re-run this job. Until then, that repo's daily check picks up ShimmerAPI $env:VERSION on its own."
+        exit 1
+    # nuget.org validates and indexes a package for minutes after the push. The LabVIEW update reads
+    # this same index, and fails if the version is not in it yet.
+    - name: Wait for nuget.org to list ShimmerAPI
+      run: |
+        $index = 'https://api.nuget.org/v3-flatcontainer/shimmerapi/index.json'
+        $deadline = (Get-Date).AddMinutes(30)
+        while ($true) {
+          try {
+            $versions = (Invoke-RestMethod $index).versions
+          } catch {
+            Write-Host "Could not read $index`: $($_.Exception.Message)"
+            $versions = @()
+          }
+          if ($versions -contains $env:VERSION) {
+            "nuget.org lists ShimmerAPI $env:VERSION"
+            break
+          }
+          if ((Get-Date) -ge $deadline) {
+            Write-Host "::error::nuget.org still does not list ShimmerAPI $env:VERSION after 30 minutes ($index). Check https://www.nuget.org/packages/ShimmerAPI/$env:VERSION, then re-run this job."
+            exit 1
+          }
+          "ShimmerAPI $env:VERSION is not listed yet; checking again in 60 s"
+          Start-Sleep -Seconds 60
+        }
+    - name: Start the LabVIEW wrapper update
+      env:
+        GH_TOKEN: ${{ secrets.LABVIEW_REPO_TOKEN }}
+      run: |
+        # URLs of that workflow's latest dispatched runs (by hand or from here), newest first
+        function Get-DispatchRuns {
+          gh run list --repo $env:LABVIEW_REPO --workflow $env:LABVIEW_WORKFLOW --event workflow_dispatch --limit 20 --json url --jq '.[].url'
+        }
+        $before = @(Get-DispatchRuns)
+        if ($LASTEXITCODE -ne 0) {
+          Write-Host "::error::Could not list the runs of $env:LABVIEW_WORKFLOW in $env:LABVIEW_REPO. LABVIEW_REPO_TOKEN needs Actions: read/write on that repo."
+          exit 1
+        }
+        gh workflow run $env:LABVIEW_WORKFLOW --repo $env:LABVIEW_REPO -f "version=$env:VERSION"
+        if ($LASTEXITCODE -ne 0) {
+          Write-Host "::error::Could not start $env:LABVIEW_WORKFLOW in $env:LABVIEW_REPO. LABVIEW_REPO_TOKEN needs Actions: read/write on that repo."
+          exit 1
+        }
+        # The run takes a few seconds to appear: it is the dispatched run that was not there before.
+        $run = $null
+        for ($i = 0; $i -lt 12 -and -not $run; $i++) {
+          Start-Sleep -Seconds 5
+          $run = Get-DispatchRuns | Where-Object { $before -notcontains $_ } | Select-Object -First 1
+        }
+        $runs = "$env:GITHUB_SERVER_URL/$env:LABVIEW_REPO/actions/workflows/$env:LABVIEW_WORKFLOW"
+        if ($run) {
+          $link = $run
+          "Started the LabVIEW wrapper update: $link"
+        } else {
+          $link = $runs
+          Write-Host "::warning::Started $env:LABVIEW_WORKFLOW in $env:LABVIEW_REPO, but could not find its run. Its runs: $runs"
+        }
+        Add-Content $env:GITHUB_STEP_SUMMARY @(
+          "### LabVIEW wrapper"
+          "- Update to ShimmerAPI $env:VERSION`: $link"
+          "- It opens a PR in $env:LABVIEW_REPO. Try the example VIs on a Shimmer3 and a Shimmer3R, then merge it: merging publishes the LabVIEW release."
+        )
+        exit 0

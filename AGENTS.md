@@ -39,6 +39,9 @@ To release:
    `csharp-hil`.
 2. Open **Actions → PublishNuGet → Run workflow** on `master` and pick the part to bump — `patch` by
    default.
+3. Review and merge the PR the run starts in `Shimmer-Labview-API` (linked from the run's summary)
+   after trying the example VIs on a Shimmer3 and a Shimmer3R. Merging it publishes the LabVIEW
+   release.
 
 That is the whole process: no version edits, no uprev PR, no hand-made release. The run stops before
 building unless the newest `csharp-hil` status on the commit is `success`, or `hil_waiver` names a Jira
@@ -54,6 +57,16 @@ A separate `publish` job then pushes exactly the packages the `build` job made t
 `ShimmerEngineering`) — ShimmerAPI first, because the Shimmer32FeetAPI package depends on that exact
 ShimmerAPI version — and only then creates the `vX.Y.Z` tag and a GitHub release with generated notes.
 A release created by hand on GitHub publishes nothing.
+
+Last, `update-labview` brings the LabVIEW wrapper along, the way the Java release's `update-matlab`
+does for MATLAB. It waits until nuget.org lists the new ShimmerAPI (validation and indexing take
+minutes after a push; it gives up after 30), then starts **Update ShimmerAPI**
+(`update-shimmerapi.yml`) in `ShimmerResearch/Shimmer-Labview-API` with that version, and links that
+run in the summary. That workflow rebuilds the wrapper and opens the PR. It needs the repo secret
+`LABVIEW_REPO_TOKEN`, a fine-grained token for `Shimmer-Labview-API` with Actions read/write; without
+it the job fails and says so. The packages and tag are already out by then, so a failure here only
+delays the wrapper: fix the cause and use *Re-run failed jobs*, as below. The LabVIEW repo's own daily
+check (03:23 UTC) picks the release up anyway.
 
 **If a release fails, recover with *Re-run failed jobs* on that same run — never a new Run
 workflow.** The re-run reuses that run's packages and commit, and `--skip-duplicate` skips whatever was
