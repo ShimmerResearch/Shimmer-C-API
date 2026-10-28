@@ -273,12 +273,12 @@ jobs:
         }
         $before = @(Get-DispatchRuns)
         if ($LASTEXITCODE -ne 0) {
-          Write-Host "::error::Could not list the runs of $env:LABVIEW_WORKFLOW in $env:LABVIEW_REPO. LABVIEW_REPO_TOKEN needs Actions: read/write on that repo."
+          Write-Host "::error::Could not list the runs of $env:LABVIEW_WORKFLOW in $env:LABVIEW_REPO. Check that LABVIEW_REPO_TOKEN has not expired and has Actions: read/write on that repo, then re-run this job."
           exit 1
         }
         gh workflow run $env:LABVIEW_WORKFLOW --repo $env:LABVIEW_REPO -f "version=$env:VERSION"
         if ($LASTEXITCODE -ne 0) {
-          Write-Host "::error::Could not start $env:LABVIEW_WORKFLOW in $env:LABVIEW_REPO. LABVIEW_REPO_TOKEN needs Actions: read/write on that repo."
+          Write-Host "::error::Could not start $env:LABVIEW_WORKFLOW in $env:LABVIEW_REPO. Check that LABVIEW_REPO_TOKEN has not expired and has Actions: read/write on that repo, then re-run this job."
           exit 1
         }
         # The run takes a few seconds to appear: it is the dispatched run that was not there before.
