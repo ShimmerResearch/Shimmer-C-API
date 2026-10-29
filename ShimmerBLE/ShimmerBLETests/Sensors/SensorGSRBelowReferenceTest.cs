@@ -14,7 +14,8 @@ namespace ShimmerBLETests
     /// tagged with the range it was measured on. The auto-range nudge floored the negative resistance
     /// at 8 kOhm, so an open circuit read 125 uS and counted as Connected. DEV-793 dataset B6 (ASM_PC
     /// Test_056, an SR68-9) has such samples on range 0 at codes 0 and 1131, range 1 at 1131 and
-    /// 1137, and range 2 at 1132.
+    /// 1137, and range 2 at 1132. An SR61-5/6 (VERISENSE_IMU) has the SR68's front end, so it takes
+    /// the SR68's limit and is checked alongside it (DEV-1069).
     /// </summary>
     public class SensorGSRBelowReferenceTest
     {
@@ -38,6 +39,12 @@ namespace ShimmerBLETests
         }
 
         [Test]
+        public void TestSR61BelowLimitReadsOpenOnEveryRangeInAutoRange()
+        {
+            AssertAutoRangeReadsOpen(HardwareIdentifier.VERISENSE_IMU, SensorGSR.GSR_UNCAL_LIMIT_RANGE3_SR68, SR68CodesBelowLimit);
+        }
+
+        [Test]
         public void TestSR62BelowLimitReadsOpenOnEveryRangeInAutoRange()
         {
             AssertAutoRangeReadsOpen(HardwareIdentifier.VERISENSE_GSR_PLUS, SensorGSR.GSR_UNCAL_LIMIT_RANGE3_SR62, SR62CodesBelowLimit);
@@ -53,6 +60,7 @@ namespace ShimmerBLETests
             for (int range = 0; range <= 3; range++)
             {
                 AssertFixedRangeReads(HardwareIdentifier.VERISENSE_PULSE_PLUS, range, SR68CodesBelowLimit, WindowMaxKOhms[range]);
+                AssertFixedRangeReads(HardwareIdentifier.VERISENSE_IMU, range, SR68CodesBelowLimit, WindowMaxKOhms[range]);
                 AssertFixedRangeReads(HardwareIdentifier.VERISENSE_GSR_PLUS, range, SR62CodesBelowLimit, WindowMaxKOhms[range]);
             }
         }
@@ -62,6 +70,7 @@ namespace ShimmerBLETests
         public void TestCodesAtOrAboveTheLimitDecodeAsBefore()
         {
             AssertCodesFromLimitDecodeAsBefore(HardwareIdentifier.VERISENSE_PULSE_PLUS, SensorGSR.GSR_UNCAL_LIMIT_RANGE3_SR68);
+            AssertCodesFromLimitDecodeAsBefore(HardwareIdentifier.VERISENSE_IMU, SensorGSR.GSR_UNCAL_LIMIT_RANGE3_SR68);
             AssertCodesFromLimitDecodeAsBefore(HardwareIdentifier.VERISENSE_GSR_PLUS, SensorGSR.GSR_UNCAL_LIMIT_RANGE3_SR62);
         }
 
