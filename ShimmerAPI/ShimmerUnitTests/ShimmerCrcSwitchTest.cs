@@ -190,6 +190,24 @@ namespace ShimmerBluetoothTests
             }
         }
 
+        /// <summary>
+        /// WriteCRCMode applies the new mode from the caller's thread when its wait ends, which can fall
+        /// while the read thread is part way through a data packet: one still on its way after a stop, say.
+        /// The read thread sized that packet in the old mode and CheckCrc read the mode again, so a switch
+        /// from one byte to two in between read past the end of the packet. That IndexOutOfRangeException
+        /// ended the read thread, and the app with it (DEV-1370). A packet is now checked in the mode it was
+        /// read in.
+        /// </summary>
+        [TestMethod]
+        public void TestASwitchPartWayThroughADataPacketDoesNotEndTheReadThread()
+        {
+            var device = new MidPacketSwitchDevice(OneByte, TwoByte, 1);
+            Exception thrown = device.Run();
+            Assert.IsNull(thrown, "The read thread ended with " + thrown);
+            // The fourth packet is still held for the timestamp check when the bytes run out
+            Assert.AreEqual(3, device.Delivered, "Packets lost across the switch");
+        }
+
         static void AssertSwitch(ShimmerBluetooth.BTCRCMode from, ShimmerBluetooth.BTCRCMode to)
         {
             var device = new CrcLinkDevice(Shimmer3R, 1, 1, 17, from);
@@ -392,6 +410,129 @@ namespace ShimmerBluetoothTests
                     }
                 }
             }
+        }
+    }
+
+    /// <summary>
+    /// A unit streaming four data packets with a link CRC, read once through the API's own ReadData. Its
+    /// link switches the API's CRC mode as the read thread takes the first payload byte of one packet,
+    /// after the packet has been sized, which is where WriteCRCMode's wait can end. The packets after that
+    /// one are framed in the new mode, as the firmware frames them once it has switched.
+    /// </summary>
+    sealed class MidPacketSwitchDevice : ShimmerBluetooth
+    {
+        const int DataPacketSize = 9;
+        readonly List<byte> bytes = new List<byte>();
+        readonly BTCRCMode to;
+        readonly int switchAt;
+        int next;
+        public int Delivered;
+
+        public MidPacketSwitchDevice(BTCRCMode from, BTCRCMode to, int switchingPacket) : base("MidPacketSwitchDevice")
+        {
+            HardwareVersion = (int)ShimmerVersion.SHIMMER3R;
+            IsFilled = true;
+            PacketSize = DataPacketSize;
+            BluetoothCRCMode = from;
+            this.to = to;
+            for (int p = 0; p < 4; p++)
+            {
+                if (p == switchingPacket)
+                {
+                    switchAt = bytes.Count + 1;
+                }
+                var packet = new List<byte> { (byte)PacketTypeShimmer2.DATA_PACKET };
+                for (int i = 0; i < DataPacketSize; i++)
+                {
+                    packet.Add((byte)(p * DataPacketSize + i + 1));
+                }
+                packet.AddRange(ShimmerUartCrcCalc(packet.ToArray(), packet.Count).Take((int)(p <= switchingPacket ? from : to)));
+                bytes.AddRange(packet);
+            }
+            UICallback += (sender, args) =>
+            {
+                if (((CustomEventArgs)args).getIndicator() == (int)ShimmerIdentifier.MSG_IDENTIFIER_DATA_PACKET)
+                {
+                    Delivered++;
+                }
+            };
+        }
+
+        /// <summary>Reads all the bytes through ReadData, and returns what ended the read thread, if anything did.</summary>
+        public Exception Run()
+        {
+            Exception thrown = null;
+            StopReading = false;
+            SetState(SHIMMER_STATE_STREAMING);
+            var reader = new Thread(() =>
+            {
+                try
+                {
+                    ReadData();
+                }
+                catch (Exception e)
+                {
+                    thrown = e;
+                }
+            });
+            reader.IsBackground = true;
+            reader.Start();
+            Assert.IsTrue(reader.Join(10000), "ReadData did not finish the stream");
+            return thrown;
+        }
+
+        protected override int ReadByte()
+        {
+            if (next >= bytes.Count)
+            {
+                StopReading = true;
+                throw new TimeoutException();
+            }
+            if (next == switchAt)
+            {
+                BluetoothCRCMode = to;
+            }
+            return bytes[next++];
+        }
+
+        /// <summary>Only that packets arrive is under test, not what they hold.</summary>
+        protected override ObjectCluster BuildMsg(List<byte> packet)
+        {
+            return new ObjectCluster("MidPacketSwitchDevice", "MidPacketSwitchDevice");
+        }
+
+        public override string GetShimmerAddress()
+        {
+            return "MidPacketSwitchDevice";
+        }
+
+        public override void SetShimmerAddress(string address)
+        {
+        }
+
+        protected override void CloseConnection()
+        {
+        }
+
+        protected override void FlushConnection()
+        {
+        }
+
+        protected override void FlushInputConnection()
+        {
+        }
+
+        protected override bool IsConnectionOpen()
+        {
+            return true;
+        }
+
+        protected override void OpenConnection()
+        {
+        }
+
+        protected override void WriteBytes(byte[] b, int index, int length)
+        {
         }
     }
 }
