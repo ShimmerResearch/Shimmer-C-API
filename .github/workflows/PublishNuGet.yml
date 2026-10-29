@@ -1,6 +1,17 @@
 name: PublishNuGet
 
-# Releases ShimmerAPI and Shimmer32FeetAPI: Actions > PublishNuGet > Run workflow, on master.
+# Releases ShimmerAPI and Shimmer32FeetAPI to nuget.org, and brings the LabVIEW wrapper along.
+#
+# How to release
+#   0. On the bench, at the commit to release: tools/hil/run-csharp-hil.ps1 -Report (tools/hil/README.md).
+#      It posts the commit status "csharp-hil". The release does not proceed without it: the build
+#      job stops before building unless that status passed for this commit, or hil_waiver gives a
+#      Jira key (the waiver goes into the release notes).
+#   1. Actions > PublishNuGet > Run workflow, on master, and pick the part to bump (patch by default).
+#   2. Try the example VIs on a Shimmer3 and a Shimmer3R with the PR it starts in Shimmer-Labview-API,
+#      then merge it. Merging publishes the LabVIEW release (that repo's release.yml). LabVIEW cannot
+#      run in CI.
+#
 # The version is the latest vX.Y.Z tag with the chosen part bumped. It is stamped into both
 # projects at build time, so the <Version> in the csproj files and Shimmer32FeetAPI's
 # AssemblyInfo.cs is only the default for local builds and is never bumped by hand.
@@ -19,12 +30,7 @@ name: PublishNuGet
 # environment, which only master may deploy to. Renaming the file or the environment means
 # updating that policy.
 # Pull requests that touch either package run the build job at the next patch version, with
-# read-only permissions and no publish or update-labview job.
-#
-# Hardware test gate: before releasing, run tools/hil/run-csharp-hil.ps1 -Report on the bench at the
-# commit being released (see tools/hil/README.md). It posts the commit status "csharp-hil". A
-# release stops before building unless that status passed for this commit, or hil_waiver gives a
-# Jira key; the release notes say which.
+# read-only permissions, no hardware test check and no publish or update-labview job.
 
 on:
   workflow_dispatch:
@@ -209,6 +215,13 @@ jobs:
         $notes += "`n`n$(if ($env:HIL) { $env:HIL } else { 'No hardware test result' })"
         gh release create "v$env:VERSION" --target $env:GITHUB_SHA --title "Shimmer C# API Rev $env:VERSION" --notes $notes --generate-notes --notes-start-tag $env:PREVIOUS_TAG
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        Add-Content $env:GITHUB_STEP_SUMMARY @(
+          "### Released C# API $env:VERSION"
+          "- Release: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/releases/tag/v$env:VERSION"
+          "- NuGet: ShimmerAPI and Shimmer32FeetAPI $env:VERSION"
+          "- $(if ($env:HIL) { $env:HIL } else { 'No hardware test result' })"
+          "- Next: update-labview starts the LabVIEW wrapper update. Try the example VIs on a Shimmer3 and a Shimmer3R with the PR it opens in Shimmer-Labview-API, then merge it; merging publishes the LabVIEW release."
+        )
 
   # Brings the LabVIEW wrapper along, so the release run shows it. Update ShimmerAPI in
   # Shimmer-Labview-API does the work; this only starts it, for this version.

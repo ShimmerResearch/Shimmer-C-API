@@ -36,12 +36,12 @@ To release:
 
 1. On the bench, at the commit being released, run the hardware tests:
    `tools/hil/run-csharp-hil.ps1 -Report` (see `tools/hil/README.md`). It posts the commit status
-   `csharp-hil`.
+   `csharp-hil`, and the release does not proceed without it.
 2. Open **Actions → PublishNuGet → Run workflow** on `master` and pick the part to bump — `patch` by
    default.
 3. Review and merge the PR the run starts in `Shimmer-Labview-API` (linked from the run's summary)
-   after trying the example VIs on a Shimmer3 and a Shimmer3R. Merging it publishes the LabVIEW
-   release.
+   after trying the example VIs on a Shimmer3 and a Shimmer3R; LabVIEW cannot run in CI. Merging it
+   publishes the LabVIEW release.
 
 That is the whole process: no version edits, no uprev PR, no hand-made release. The run stops before
 building unless the newest `csharp-hil` status on the commit is `success`, or `hil_waiver` names a Jira
