@@ -1388,7 +1388,11 @@ namespace ShimmerAPI
                                     List<byte> dataByte;
                                     dataByte = new List<byte>();
                                     int packetSize = PacketSize;
-                                    packetSize = packetSize + (int)BluetoothCRCMode;
+                                    // Read once: WriteCRCMode can change it from the caller's thread while
+                                    // this packet is being read, and the CRC check must use the size read here
+                                    // (DEV-1370)
+                                    BTCRCMode crcMode = BluetoothCRCMode;
+                                    packetSize = packetSize + (int)crcMode;
                                     if (UnalignedBytesReceived.Count > 0)
                                     {
                                         dataByte = UnalignedBytesReceived.ToArray().ToList<byte>();
@@ -1404,13 +1408,13 @@ namespace ShimmerAPI
                                     // Building the packet moves the timestamp unwrap; this is what to put
                                     // back if the packet is thrown away later (DiscardKeptPacket)
                                     TimestampState beforeThisPacket = CaptureTimestampState();
-                                    if (BluetoothCRCMode != BTCRCMode.OFF)
+                                    if (crcMode != BTCRCMode.OFF)
                                     {
                                         byte[] dataArray = dataByte.ToArray();
                                         byte[] fullPacket = new byte[dataArray.Length + 1];
                                         System.Array.Copy(dataArray, 0, fullPacket, 1, dataArray.Length);
                                         fullPacket[0] = (byte)PacketTypeShimmer2.DATA_PACKET;
-                                        check = CheckCrc(fullPacket, PacketSize + 1);
+                                        check = CheckCrc(fullPacket, PacketSize + 1, crcMode);
                                     }
                                     if (check)
                                     {
@@ -8230,9 +8234,18 @@ namespace ShimmerAPI
 
         public bool CheckCrc(byte[] bufferTemp, int length)
         {
+            return CheckCrc(bufferTemp, length, BluetoothCRCMode);
+        }
+
+        /// <summary>
+        /// Checks the packet's CRC in the given mode: the mode the packet was read in, which can differ
+        /// from BluetoothCRCMode by the time the packet is checked (DEV-1370).
+        /// </summary>
+        public bool CheckCrc(byte[] bufferTemp, int length, BTCRCMode crcMode)
+        {
             byte[] crcCalc = ShimmerUartCrcCalc(bufferTemp, length);
 
-            if (BluetoothCRCMode == BTCRCMode.ONE_BYTE || BluetoothCRCMode == BTCRCMode.TWO_BYTE)
+            if (crcMode == BTCRCMode.ONE_BYTE || crcMode == BTCRCMode.TWO_BYTE)
             {
                 // + 1 as this is the location of the CRC's LSB
                 if (bufferTemp[PacketSize + 1] != crcCalc[0])
@@ -8241,7 +8254,7 @@ namespace ShimmerAPI
                 }
             }
 
-            if (BluetoothCRCMode == BTCRCMode.TWO_BYTE)
+            if (crcMode == BTCRCMode.TWO_BYTE)
             {
                 // + 2 as this is the location of the CRC's MSB
                 if (bufferTemp[PacketSize + 2] != crcCalc[1])
