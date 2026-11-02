@@ -36,7 +36,8 @@ To release:
 
 1. On the bench, at the commit being released, run the hardware tests:
    `tools/hil/run-csharp-hil.ps1 -Report` (see `tools/hil/README.md`). It posts the commit status
-   `csharp-hil`, and the release does not proceed without it.
+   `csharp-hil`, and the release does not proceed without it. Run it after the last merge: any later
+   merge, docs or test code included, moves `master` to a commit with no result.
 2. Open **Actions → PublishNuGet → Run workflow** on `master` and pick the part to bump — `patch` by
    default.
 3. Review and merge the PR the run starts in `Shimmer-Labview-API` (linked from the run's summary)
