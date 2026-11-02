@@ -40,7 +40,8 @@ namespace Shimmer32FeetAPI.Radios
                 CurrentRadioStatus = RadioStatus.Connecting;
                 RadioStatusChanged?.Invoke(this, CurrentRadioStatus);
                 //SetState(SHIMMER_STATE_CONNECTING);
-                bluetoothDevice = BluetoothDevice.FromIdAsync(MacAddress).GetAwaiter().GetResult();
+                // Listens for the device's advertising first if Windows has not seen it yet (DEV-1394)
+                bluetoothDevice = BleDeviceLookup.FindAsync(MacAddress).GetAwaiter().GetResult();
                 if (bluetoothDevice == null)
                 {
                     CurrentRadioStatus = RadioStatus.Disconnected;

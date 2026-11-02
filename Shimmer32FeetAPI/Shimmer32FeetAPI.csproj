@@ -62,6 +62,7 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="BleDeviceLookup.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Radios\BLE32FeetRadio.cs" />
     <Compile Include="Shimmer32Feet.cs" />
