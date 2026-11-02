@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
+using System.Reflection;
 using System.Threading;
 using ShimmerAPI;
 
@@ -220,6 +221,32 @@ namespace ShimmerApiHil
         public string Identity()
         {
             return Device.GetFirmwareVersionFullName();
+        }
+
+        /// <summary>
+        /// Why the unit will not log to its SD card, or null if nothing says it won't, as the Android
+        /// HIL's ShimmerSession.whyCannotLog. Docked, or on USB (Shimmer3R), the firmware ACKs a start
+        /// of logging and then ignores it (LogAndStream v1.01.002 on Shimmer3, v1.01.004 on Shimmer3R).
+        /// Taken from the status the connect read: bit 0 of its first byte is docked, and bit 0 of a
+        /// Shimmer3R's second byte is USB plugged in.
+        /// </summary>
+        public string WhyCannotLog()
+        {
+            if (Device.CurrentDockStatus)
+            {
+                return "the unit reports itself docked";
+            }
+            // The API keeps the USB bit in a protected field with no getter
+            FieldInfo usb = typeof(ShimmerLogAndStream).GetField("currentUsbState", BindingFlags.Instance | BindingFlags.NonPublic);
+            if (usb == null)
+            {
+                throw new HilFailure("the suite cannot read the API's USB state: ShimmerLogAndStream.currentUsbState is gone");
+            }
+            if ((ShimmerLogAndStream.UsbState)usb.GetValue(Device) == ShimmerLogAndStream.UsbState.Plugged)
+            {
+                return "the unit reports USB plugged in";
+            }
+            return null;
         }
 
         /// <summary>

@@ -165,6 +165,7 @@ namespace ShimmerApiHil
         {
             s.WithLink(c, link =>
             {
+                CheckCanLog(link);
                 link.Configure();
                 link.StartStreaming(andLog: true);
                 // The API keeps the last battery reading. Cleared here, a reading afterwards can only
@@ -689,6 +690,21 @@ namespace ShimmerApiHil
                     throw new HilFailure(string.Join("; ", problems));
                 }
             });
+        }
+
+        /// <summary>
+        /// For an item that logs to the SD card: fails it at once, saying why, if the unit is docked or
+        /// on USB, as the Android HIL's checkCanLog does. The firmware then ignores the start, and the
+        /// API shows a Shimmer3R on USB logging all the same, so the item would pass without logging
+        /// anything (DEV-1372).
+        /// </summary>
+        static void CheckCanLog(Link link)
+        {
+            string why = link.WhyCannotLog();
+            if (why != null)
+            {
+                throw new HilFailure(why + ": the firmware will not start SD logging, so this item cannot run. Take the unit off the dock and USB, then run it again");
+            }
         }
 
         static void Judge(Case c, StreamChecks.Stream stream, string prefix)
