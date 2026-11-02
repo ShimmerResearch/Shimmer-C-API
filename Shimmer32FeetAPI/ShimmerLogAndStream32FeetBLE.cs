@@ -120,11 +120,13 @@ namespace ShimmerAPI
                 int otherVersion = HardwareVersion == (int)ShimmerVersion.SHIMMER3R ? (int)ShimmerVersion.SHIMMER3 : (int)ShimmerVersion.SHIMMER3R;
                 BluetoothUuid TxID = default(BluetoothUuid), RxID = default(BluetoothUuid);
                 bool found = false;
+                int linkMtu = 0;
                 for (int attempt = 1; attempt <= GattAttempts && !found; attempt++)
                 {
                     if (attempt > 1)
                     {
-                        Console.WriteLine("Radio Plugin 32Feet: no UART service on a link at MTU " + bluetoothDevice.Gatt.Mtu + "; opening another");
+                        // The MTU the link came up at: by now Windows may have raised it
+                        Console.WriteLine("Radio Plugin 32Feet: no UART service on a link that came up at MTU " + linkMtu + "; opening another");
                         bluetoothDevice.Gatt.Disconnect();
                         Thread.Sleep(GattRetryPauseMs);
                     }
@@ -137,8 +139,9 @@ namespace ShimmerAPI
                         return;
                     }
                     bluetoothDevice.Gatt.ConnectAsync().GetAwaiter().GetResult();
-                    Console.WriteLine("current mtu value " + bluetoothDevice.Gatt.Mtu);
-                    found = FindUartService(HardwareVersion, out TxID, out RxID) || FindUartService(otherVersion, out TxID, out RxID);
+                    linkMtu = bluetoothDevice.Gatt.Mtu;
+                    Console.WriteLine("current mtu value " + linkMtu);
+                    found =FindUartService(HardwareVersion, out TxID, out RxID) || FindUartService(otherVersion, out TxID, out RxID);
                 }
                 if (!found)
                 {
