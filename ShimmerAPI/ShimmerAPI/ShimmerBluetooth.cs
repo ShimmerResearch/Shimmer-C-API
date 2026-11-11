@@ -420,7 +420,8 @@ namespace ShimmerAPI
             Exg2_CH2_16Bit = 0x26,
             STRAIN_HIGH = 0x27,
             STRAIN_LOW = 0x28,
-            GsrRaw = 0x1C
+            GsrRaw = 0x1C,
+            SoundLevel = 0x38 // Shimmer3R only
         }
 
         public enum ChannelContentsShimmer2
@@ -3974,6 +3975,14 @@ namespace ShimmerAPI
                         enabledSensors = (enabledSensors | (int)SensorBitmapShimmer3.SENSOR_BRIDGE_AMP);
                     }
                 }
+                else if ((byte)signalid[i] == (byte)0x38 && HardwareVersion == (int)ShimmerVersion.SHIMMER3R)
+                {
+                    // Sound level: int16, little-endian. It has no enabled-sensors bit; the firmware
+                    // turns it on from config byte 233 bit 4, so the channel list is what says it is there.
+                    signalNameArray[i + 1] = Shimmer3RConfiguration.SignalNames.SOUND_LEVEL;
+                    signalDataTypeArray[i + 1] = "i16";
+                    packetSize = packetSize + 2;
+                }
                 else
                 {
                     signalNameArray[i + 1] = "";
@@ -4709,6 +4718,14 @@ namespace ShimmerAPI
                     objectCluster.Add(Shimmer3Configuration.SignalNames.BRIGE_AMPLIFIER_HIGH, ShimmerConfiguration.SignalFormats.CAL, ShimmerConfiguration.SignalUnits.MilliVolts, datatemp[0]);
                     objectCluster.Add(Shimmer3Configuration.SignalNames.BRIGE_AMPLIFIER_LOW, ShimmerConfiguration.SignalFormats.RAW, ShimmerConfiguration.SignalUnits.NoUnits, newPacket[iSGLow]);
                     objectCluster.Add(Shimmer3Configuration.SignalNames.BRIGE_AMPLIFIER_LOW, ShimmerConfiguration.SignalFormats.CAL, ShimmerConfiguration.SignalUnits.MilliVolts, datatemp[1]);
+                }
+                // The sound level has no enabled-sensors bit, so look for its channel instead.
+                // getSignalIndex() can't say "absent": it returns 0, the timestamp's index.
+                int iSoundLevel = Array.IndexOf(SignalNameArray, Shimmer3RConfiguration.SignalNames.SOUND_LEVEL);
+                if (iSoundLevel > 0)
+                {
+                    objectCluster.Add(Shimmer3RConfiguration.SignalNames.SOUND_LEVEL, ShimmerConfiguration.SignalFormats.RAW, ShimmerConfiguration.SignalUnits.NoUnits, newPacket[iSoundLevel]);
+                    objectCluster.Add(Shimmer3RConfiguration.SignalNames.SOUND_LEVEL, ShimmerConfiguration.SignalFormats.CAL, ShimmerConfiguration.SignalUnits.DecibelsA, CalibrateSoundLevel(newPacket[iSoundLevel]));
                 }
                 if ((((EnabledSensors & (int)SensorBitmapShimmer3.SENSOR_A_ACCEL) > 0) || ((EnabledSensors & (int)SensorBitmapShimmer3.SENSOR_D_ACCEL) > 0) || ((EnabledSensors & (int)SensorBitmapShimmer3.SENSOR_ACCEL_ALT) > 0))
                  && ((EnabledSensors & (int)SensorBitmapShimmer3.SENSOR_GYRO) > 0) && (((EnabledSensors & (int)SensorBitmapShimmer3.SENSOR_MAG) > 0) || ((EnabledSensors & (int)SensorBitmapShimmer3.SENSOR_MAG_ALT) > 0))
@@ -7999,6 +8016,25 @@ namespace ShimmerAPI
             return calData;
         }
 
+        /// <summary>
+        /// The raw value the Shimmer3R sends on the sound level channel (0x38) while it has no level:
+        /// before the first level after the microphone capture starts, and while the capture is not
+        /// running.
+        /// </summary>
+        public const int SOUND_LEVEL_NO_LEVEL = -32768;
+
+        /// <summary>
+        /// Converts a raw sound level (0x38, int16 in 0.01 dB(A) steps) to dB(A): NaN for
+        /// <see cref="SOUND_LEVEL_NO_LEVEL"/>, raw / 100 otherwise. The level is the firmware's nominal
+        /// A-weighted SPL, not checked against a calibrated meter. Each value covers 128 ms of audio
+        /// and repeats until the next one; the middle of those 128 ms is 64 to 192 ms before the
+        /// packet's timestamp.
+        /// </summary>
+        public static double CalibrateSoundLevel(long raw)
+        {
+            return raw == SOUND_LEVEL_NO_LEVEL ? double.NaN : raw / 100.0;
+        }
+
         protected double CalibrateU12AdcValue(double uncalibratedData, double offset, double vRefP, double gain)
         {
             double calibratedData = (uncalibratedData - offset) * (((vRefP * 1000) / gain) / 4095);
@@ -8362,6 +8398,7 @@ namespace ShimmerAPI
             public static readonly String KiloOhms = "kOhms";
             public static readonly String MicroSiemens = "uSiemens";
             public static readonly String NanoAmpere = "nA";
+            public static readonly String DecibelsA = "dB(A)";
         }
     }
 
@@ -8505,6 +8542,13 @@ namespace ShimmerAPI
             public static readonly String GEN_INT_ADC_A2 = "Internal ADC A2";
             public static readonly String GEN_INT_ADC_A3 = "Internal ADC A3";
             public static readonly String GEN_INT_ADC_A4 = "Internal ADC A4";
+
+            /// <summary>
+            /// Channel 0x38: the A-weighted sound level the firmware computes from the microphone, in
+            /// 0.01 dB(A) steps. CAL is in dB(A), and NaN while the firmware has no level to report.
+            /// LogAndStream_Shimmer3R v1.01.026 is the first release with it.
+            /// </summary>
+            public static readonly String SOUND_LEVEL = "Sound Level";
 
             //3R end
         }
