@@ -3761,6 +3761,14 @@ namespace ShimmerAPI
                         signalNameArray[i + 1] = Shimmer3Configuration.SignalNames.HIGH_G_ACCELEROMETER_X;
                         enabledSensors = (enabledSensors | (int)SensorBitmapShimmer3.SENSOR_ACCEL_ALT);
                     }
+                    else if (HardwareVersion == (int)ShimmerVersion.SHIMMER3)
+                    {
+                        //MPU-9150/9250 or ICM-20948 accelerometer: int16, big-endian (read from ACCEL_XOUT_H)
+                        signalDataTypeArray[i + 1] = "i16r";
+                        packetSize = packetSize + 2;
+                        signalNameArray[i + 1] = Shimmer3Configuration.SignalNames.ALTERNATIVE_ACCELEROMETER_X;
+                        enabledSensors = (enabledSensors | (int)SensorBitmapShimmer3.SENSOR_ACCEL_ALT);
+                    }
                 }
                 else if ((byte)signalid[i] == (byte)0x15)
                 {
@@ -3769,6 +3777,13 @@ namespace ShimmerAPI
                         signalDataTypeArray[i + 1] = "i12*>";
                         packetSize = packetSize + 2;
                         signalNameArray[i + 1] = Shimmer3Configuration.SignalNames.HIGH_G_ACCELEROMETER_Y;
+                        enabledSensors = (enabledSensors | (int)SensorBitmapShimmer3.SENSOR_ACCEL_ALT);
+                    }
+                    else if (HardwareVersion == (int)ShimmerVersion.SHIMMER3)
+                    {
+                        signalDataTypeArray[i + 1] = "i16r";
+                        packetSize = packetSize + 2;
+                        signalNameArray[i + 1] = Shimmer3Configuration.SignalNames.ALTERNATIVE_ACCELEROMETER_Y;
                         enabledSensors = (enabledSensors | (int)SensorBitmapShimmer3.SENSOR_ACCEL_ALT);
                     }
                 }
@@ -3781,6 +3796,13 @@ namespace ShimmerAPI
                         signalNameArray[i + 1] = Shimmer3Configuration.SignalNames.HIGH_G_ACCELEROMETER_Z;
                         enabledSensors = (enabledSensors | (int)SensorBitmapShimmer3.SENSOR_ACCEL_ALT);
                     }
+                    else if (HardwareVersion == (int)ShimmerVersion.SHIMMER3)
+                    {
+                        signalDataTypeArray[i + 1] = "i16r";
+                        packetSize = packetSize + 2;
+                        signalNameArray[i + 1] = Shimmer3Configuration.SignalNames.ALTERNATIVE_ACCELEROMETER_Z;
+                        enabledSensors = (enabledSensors | (int)SensorBitmapShimmer3.SENSOR_ACCEL_ALT);
+                    }
                 }
                 else if ((byte)signalid[i] == (byte)0x17)
                 {
@@ -3788,6 +3810,14 @@ namespace ShimmerAPI
                     {
                         signalNameArray[i + 1] = Shimmer3Configuration.SignalNames.ALT_MAGNETOMETER_X;
                         signalDataTypeArray[i + 1] = "i16"; //TBD; used Signal Datatype from Mag as placeholder
+                        packetSize = packetSize + 2;
+                        enabledSensors = (enabledSensors | (int)SensorBitmapShimmer3.SENSOR_MAG_ALT);
+                    }
+                    else if (HardwareVersion == (int)ShimmerVersion.SHIMMER3)
+                    {
+                        //AK8975/AK8963 or AK09916 magnetometer: int16, little-endian (read from HXL)
+                        signalNameArray[i + 1] = Shimmer3Configuration.SignalNames.ALT_MAGNETOMETER_X;
+                        signalDataTypeArray[i + 1] = "i16";
                         packetSize = packetSize + 2;
                         enabledSensors = (enabledSensors | (int)SensorBitmapShimmer3.SENSOR_MAG_ALT);
                     }
@@ -3801,6 +3831,13 @@ namespace ShimmerAPI
                         packetSize = packetSize + 2;
                         enabledSensors = (enabledSensors | (int)SensorBitmapShimmer3.SENSOR_MAG_ALT);
                     }
+                    else if (HardwareVersion == (int)ShimmerVersion.SHIMMER3)
+                    {
+                        signalNameArray[i + 1] = Shimmer3Configuration.SignalNames.ALT_MAGNETOMETER_Y;
+                        signalDataTypeArray[i + 1] = "i16";
+                        packetSize = packetSize + 2;
+                        enabledSensors = (enabledSensors | (int)SensorBitmapShimmer3.SENSOR_MAG_ALT);
+                    }
                 }
                 else if ((byte)signalid[i] == (byte)0x19)
                 {
@@ -3808,6 +3845,13 @@ namespace ShimmerAPI
                     {
                         signalNameArray[i + 1] = Shimmer3Configuration.SignalNames.ALT_MAGNETOMETER_Z;
                         signalDataTypeArray[i + 1] = "i16"; //TBD; used Signal Datatype from Mag as placeholder
+                        packetSize = packetSize + 2;
+                        enabledSensors = (enabledSensors | (int)SensorBitmapShimmer3.SENSOR_MAG_ALT);
+                    }
+                    else if (HardwareVersion == (int)ShimmerVersion.SHIMMER3)
+                    {
+                        signalNameArray[i + 1] = Shimmer3Configuration.SignalNames.ALT_MAGNETOMETER_Z;
+                        signalDataTypeArray[i + 1] = "i16";
                         packetSize = packetSize + 2;
                         enabledSensors = (enabledSensors | (int)SensorBitmapShimmer3.SENSOR_MAG_ALT);
                     }
@@ -4034,6 +4078,11 @@ namespace ShimmerAPI
 
             if (HardwareVersion == (int)ShimmerVersion.SHIMMER3 || HardwareVersion == (int)ShimmerVersion.SHIMMER3R)
             {
+                //A Shimmer3's alternative accel and mag are output uncalibrated and leave accelerometer[] and
+                //magnetometer[] alone, so on a Shimmer3 the orientation needs the LN or WR accel and the mag
+                bool orientationInputsCalibrated = HardwareVersion == (int)ShimmerVersion.SHIMMER3R
+                    || ((((EnabledSensors & (int)SensorBitmapShimmer3.SENSOR_A_ACCEL) > 0) || ((EnabledSensors & (int)SensorBitmapShimmer3.SENSOR_D_ACCEL) > 0))
+                        && ((EnabledSensors & (int)SensorBitmapShimmer3.SENSOR_MAG) > 0));
                 if (((EnabledSensors & (int)SensorBitmapShimmer3.SENSOR_A_ACCEL) > 0))
                 {
                     int iAccelX = getSignalIndex(Shimmer3Configuration.SignalNames.LOW_NOISE_ACCELEROMETER_X); //find index
@@ -4088,7 +4137,19 @@ namespace ShimmerAPI
                     accelerometer[2] = datatemp[2];
 
                 }
-                if (((EnabledSensors & (int)SensorBitmapShimmer3.SENSOR_ACCEL_ALT) > 0))
+                if (((EnabledSensors & (int)SensorBitmapShimmer3.SENSOR_ACCEL_ALT) > 0) && HardwareVersion == (int)ShimmerVersion.SHIMMER3)
+                {
+                    //The MPU-9150/9250 or ICM-20948 accelerometer. The API holds no Shimmer3 calibration for it,
+                    //so it is output uncalibrated, and it does not stand in for the LN or WR accel in the
+                    //orientation below
+                    int iAccelX = getSignalIndex(Shimmer3Configuration.SignalNames.ALTERNATIVE_ACCELEROMETER_X); //find index
+                    int iAccelY = getSignalIndex(Shimmer3Configuration.SignalNames.ALTERNATIVE_ACCELEROMETER_Y); //find index
+                    int iAccelZ = getSignalIndex(Shimmer3Configuration.SignalNames.ALTERNATIVE_ACCELEROMETER_Z); //find index
+                    objectCluster.Add(Shimmer3Configuration.SignalNames.ALTERNATIVE_ACCELEROMETER_X, ShimmerConfiguration.SignalFormats.RAW, ShimmerConfiguration.SignalUnits.NoUnits, newPacket[iAccelX]);
+                    objectCluster.Add(Shimmer3Configuration.SignalNames.ALTERNATIVE_ACCELEROMETER_Y, ShimmerConfiguration.SignalFormats.RAW, ShimmerConfiguration.SignalUnits.NoUnits, newPacket[iAccelY]);
+                    objectCluster.Add(Shimmer3Configuration.SignalNames.ALTERNATIVE_ACCELEROMETER_Z, ShimmerConfiguration.SignalFormats.RAW, ShimmerConfiguration.SignalUnits.NoUnits, newPacket[iAccelZ]);
+                }
+                if (((EnabledSensors & (int)SensorBitmapShimmer3.SENSOR_ACCEL_ALT) > 0) && HardwareVersion == (int)ShimmerVersion.SHIMMER3R)
                 {
                     int iAccelX = getSignalIndex(Shimmer3Configuration.SignalNames.HIGH_G_ACCELEROMETER_X); //find index
                     int iAccelY = getSignalIndex(Shimmer3Configuration.SignalNames.HIGH_G_ACCELEROMETER_Y); //find index
@@ -4199,7 +4260,17 @@ namespace ShimmerAPI
                     magnetometer[1] = datatemp[1];
                     magnetometer[2] = datatemp[2];
                 }
-                if (((EnabledSensors & (int)SensorBitmapShimmer3.SENSOR_MAG_ALT) > 0))
+                if (((EnabledSensors & (int)SensorBitmapShimmer3.SENSOR_MAG_ALT) > 0) && HardwareVersion == (int)ShimmerVersion.SHIMMER3)
+                {
+                    //The AK8975/AK8963 or AK09916 magnetometer: uncalibrated, as the alternative accelerometer above
+                    int iMagX = getSignalIndex(Shimmer3Configuration.SignalNames.ALT_MAGNETOMETER_X);
+                    int iMagY = getSignalIndex(Shimmer3Configuration.SignalNames.ALT_MAGNETOMETER_Y);
+                    int iMagZ = getSignalIndex(Shimmer3Configuration.SignalNames.ALT_MAGNETOMETER_Z);
+                    objectCluster.Add(Shimmer3Configuration.SignalNames.ALT_MAGNETOMETER_X, ShimmerConfiguration.SignalFormats.RAW, ShimmerConfiguration.SignalUnits.NoUnits, newPacket[iMagX]);
+                    objectCluster.Add(Shimmer3Configuration.SignalNames.ALT_MAGNETOMETER_Y, ShimmerConfiguration.SignalFormats.RAW, ShimmerConfiguration.SignalUnits.NoUnits, newPacket[iMagY]);
+                    objectCluster.Add(Shimmer3Configuration.SignalNames.ALT_MAGNETOMETER_Z, ShimmerConfiguration.SignalFormats.RAW, ShimmerConfiguration.SignalUnits.NoUnits, newPacket[iMagZ]);
+                }
+                if (((EnabledSensors & (int)SensorBitmapShimmer3.SENSOR_MAG_ALT) > 0) && HardwareVersion == (int)ShimmerVersion.SHIMMER3R)
                 {
                     int iMagX = getSignalIndex(Shimmer3Configuration.SignalNames.ALT_MAGNETOMETER_X);
                     int iMagY = getSignalIndex(Shimmer3Configuration.SignalNames.ALT_MAGNETOMETER_Y);
@@ -4712,7 +4783,7 @@ namespace ShimmerAPI
                 }
                 if ((((EnabledSensors & (int)SensorBitmapShimmer3.SENSOR_A_ACCEL) > 0) || ((EnabledSensors & (int)SensorBitmapShimmer3.SENSOR_D_ACCEL) > 0) || ((EnabledSensors & (int)SensorBitmapShimmer3.SENSOR_ACCEL_ALT) > 0))
                  && ((EnabledSensors & (int)SensorBitmapShimmer3.SENSOR_GYRO) > 0) && (((EnabledSensors & (int)SensorBitmapShimmer3.SENSOR_MAG) > 0) || ((EnabledSensors & (int)SensorBitmapShimmer3.SENSOR_MAG_ALT) > 0))
-                 && Orientation3DEnabled)
+                 && Orientation3DEnabled && orientationInputsCalibrated)
                 {
                     if (OrientationAlgo == null)
                     {
@@ -8432,6 +8503,11 @@ namespace ShimmerAPI
             public static readonly String HIGH_G_ACCELEROMETER_X = "High G Accelerometer X";
             public static readonly String HIGH_G_ACCELEROMETER_Y = "High G Accelerometer Y";
             public static readonly String HIGH_G_ACCELEROMETER_Z = "High G Accelerometer Z";
+            // Shimmer3 only: the MPU-9150/9250 or ICM-20948 accelerometer on channels 0x14-0x16, which the
+            // Shimmer3R uses for its high-g accelerometer
+            public static readonly String ALTERNATIVE_ACCELEROMETER_X = "Alternative Accelerometer X";
+            public static readonly String ALTERNATIVE_ACCELEROMETER_Y = "Alternative Accelerometer Y";
+            public static readonly String ALTERNATIVE_ACCELEROMETER_Z = "Alternative Accelerometer Z";
             public static readonly String MAGNETOMETER_X = "Magnetometer X";
             public static readonly String MAGNETOMETER_Y = "Magnetometer Y";
             public static readonly String MAGNETOMETER_Z = "Magnetometer Z";
