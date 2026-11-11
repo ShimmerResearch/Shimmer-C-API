@@ -8546,6 +8546,7 @@ namespace ShimmerAPI
             /// <summary>
             /// Channel 0x38: the A-weighted sound level the firmware computes from the microphone, in
             /// 0.01 dB(A) steps. CAL is in dB(A), and NaN while the firmware has no level to report.
+            /// LogAndStream_Shimmer3R v1.01.026 is the first release with it.
             /// </summary>
             public static readonly String SOUND_LEVEL = "Sound Level";
 
