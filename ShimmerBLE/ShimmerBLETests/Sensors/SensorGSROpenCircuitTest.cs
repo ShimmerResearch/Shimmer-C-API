@@ -11,7 +11,8 @@ namespace ShimmerBLETests
     /// reads a few codes either side of it: an SR68-9 open-circuit recording (DEV-793 dataset B6)
     /// peaks at codes 1126-1136. The range-3 limit was 1134, itself below the 0.4986 V reference
     /// (code 1134.3), so every clamped sample decoded to a negative resistance, which the auto-range
-    /// nudge floored at 8 kOhm: an open circuit read 125 uS and counted as Connected.
+    /// nudge floored at 8 kOhm: an open circuit read 125 uS and counted as Connected. An SR61-5/6
+    /// has the same front end and arrives as VERISENSE_IMU, so each case runs on it too (DEV-1069).
     /// </summary>
     public class SensorGSROpenCircuitTest
     {
@@ -19,10 +20,11 @@ namespace ShimmerBLETests
         /// <summary>Top of range 3, 4.7 MOhm - an open circuit should read at least this.</summary>
         const double Range3MaxKOhms = 4700.0;
 
-        [Test]
-        public void TestOpenCircuitOnRange3ReadsOpenInAutoRange()
+        [TestCase(HardwareIdentifier.VERISENSE_PULSE_PLUS)]
+        [TestCase(HardwareIdentifier.VERISENSE_IMU)]
+        public void TestOpenCircuitOnRange3ReadsOpenInAutoRange(HardwareIdentifier hardware)
         {
-            var sensor = CreateSR68Sensor(SensorGSR.GSRRange.Range_Auto);
+            var sensor = CreateSensor(hardware, SensorGSR.GSRRange.Range_Auto);
             for (int code = 1134; code <= 1138; code++)
             {
                 AssertReadsOpen(sensor, code, "auto-range");
@@ -35,10 +37,11 @@ namespace ShimmerBLETests
         /// 4.7 MOhm (0.213 uS, still above the 0.03 uS connectivity threshold) rather than the
         /// 680 kOhm bottom of the range that 1134 produced.
         /// </summary>
-        [Test]
-        public void TestOpenCircuitOnRange3ReadsOpenInFixedRange3()
+        [TestCase(HardwareIdentifier.VERISENSE_PULSE_PLUS)]
+        [TestCase(HardwareIdentifier.VERISENSE_IMU)]
+        public void TestOpenCircuitOnRange3ReadsOpenInFixedRange3(HardwareIdentifier hardware)
         {
-            var sensor = CreateSR68Sensor(SensorGSR.GSRRange.Range_3);
+            var sensor = CreateSensor(hardware, SensorGSR.GSRRange.Range_3);
             for (int code = 1134; code <= 1138; code++)
             {
                 AssertReadsOpen(sensor, code, "fixed range 3");
@@ -57,10 +60,10 @@ namespace ShimmerBLETests
             Assert.That(CalibrateADCValueToVolts(limit - 1, HardwareIdentifier.VERISENSE_PULSE_PLUS), Is.LessThan(0.5));
         }
 
-        private static SensorGSR CreateSR68Sensor(Sensor.SensorSetting range)
+        private static SensorGSR CreateSensor(HardwareIdentifier hardware, Sensor.SensorSetting range)
         {
             var sensor = new SensorGSR();
-            sensor.SetDeviceHardwareIdentifier(HardwareIdentifier.VERISENSE_PULSE_PLUS);
+            sensor.SetDeviceHardwareIdentifier(hardware);
             sensor.SetGSREnabled(true);
             sensor.SetGSRRange(range);
             return sensor;

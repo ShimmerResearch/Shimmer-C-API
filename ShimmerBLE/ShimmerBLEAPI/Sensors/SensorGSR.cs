@@ -388,21 +388,31 @@ namespace shimmer.Sensors
             return GSROversamplingRateSetting;
         }
         /// <summary>
+        /// Whether the device has the second-generation DC GSR front end, which takes
+        /// SR68_GSR_REF_RESISTORS_KOHMS, the 0.4986 V reference and GSR_UNCAL_LIMIT_RANGE3_SR68 in
+        /// place of the Shimmer3 values. The firmware chooses on the hardware major alone, the GSR+
+        /// (SR62) against every other board (verisense-firmware hal_gsr.c,
+        /// selectFeedbackResistorsFromHwVersion). Of the boards with GSR, the others are the SR68 and
+        /// the SR61, each from minor revision 5 (shimmer_boards.c,
+        /// ShimBrd_isGsrSupportedForHwVersion). Keying this on VERISENSE_PULSE_PLUS alone decoded an
+        /// SR61-5/6, which arrives as VERISENSE_IMU, with the Shimmer3 values: ~1.9x high, and
+        /// without the range-3 clamp (DEV-1069). The Java driver (DEV-793) and the web SDK (DEV-874)
+        /// make the same choice on every board with GSR, as VerisenseDevice.CalibrateADCValueToVolts
+        /// already does for the 1.8 V ADC reference.
+        /// </summary>
+        private bool HasSecondGenerationGsrFrontEnd()
+        {
+            return !DeviceHardwareIdentifier.Equals(HardwareIdentifier.VERISENSE_GSR_PLUS);
+        }
+        /// <summary>
         /// The range-3 open-circuit limit for this device's front end: the first code above its
-        /// amplifier reference, below which a sample on any range is an open circuit. Other boards get
-        /// none, as before, and every code decodes on its own range.
+        /// amplifier reference, below which a sample on any range is an open circuit (DEV-1067,
+        /// DEV-1070). It follows the same front-end choice as the feedback resistors and reference
+        /// (HasSecondGenerationGsrFrontEnd), so an SR61-5/6 gets the SR68's limit (DEV-1069).
         /// </summary>
         private int GetGsrUncalLimitRange3()
         {
-            if (DeviceHardwareIdentifier.Equals(HardwareIdentifier.VERISENSE_PULSE_PLUS))
-            {
-                return GSR_UNCAL_LIMIT_RANGE3_SR68;
-            }
-            if (DeviceHardwareIdentifier.Equals(HardwareIdentifier.VERISENSE_GSR_PLUS))
-            {
-                return GSR_UNCAL_LIMIT_RANGE3_SR62;
-            }
-            return 0;
+            return HasSecondGenerationGsrFrontEnd() ? GSR_UNCAL_LIMIT_RANGE3_SR68 : GSR_UNCAL_LIMIT_RANGE3_SR62;
         }
         /// <summary>
         /// Calibrate GSR Data to KOhms using the amplifier equation. The output may differs with different hardware
@@ -413,12 +423,12 @@ namespace shimmer.Sensors
         public double CalibrateGsrDataToKOhmsUsingAmplifierEq(double volts, int range)
         {
             var rFeedback = SHIMMER3_GSR_REF_RESISTORS_KOHMS[range];
-            if (DeviceHardwareIdentifier.Equals(HardwareIdentifier.VERISENSE_PULSE_PLUS))
+            if (HasSecondGenerationGsrFrontEnd())
             {
                 rFeedback = SR68_GSR_REF_RESISTORS_KOHMS[range];
             }
             var gsr_ref_voltage = 0.5;
-            if (DeviceHardwareIdentifier.Equals(VerisenseDevice.HardwareIdentifier.VERISENSE_PULSE_PLUS))
+            if (HasSecondGenerationGsrFrontEnd())
             {
                 gsr_ref_voltage = 0.4986;
             }
