@@ -1068,6 +1068,44 @@ public void ProcessSDLogHeader(byte[] byteArrayInfo)
                     }
                 }
 
+                // Alternative accel: the MPU-9150/9250 or ICM-20948 accelerometer, big-endian
+                if ((EnabledSensors & SDLogHeader.ACCEL_MPU) > 0)
+                {
+                    NumberofChannels += 3;
+                    PacketSize += 6;
+
+                    signalNameArray[i + 1] = Shimmer3Configuration.SignalNames.ALTERNATIVE_ACCELEROMETER_X;
+                    signalDataTypeArray[i + 1] = "i16r";
+                    i++;
+
+                    signalNameArray[i + 1] = Shimmer3Configuration.SignalNames.ALTERNATIVE_ACCELEROMETER_Y;
+                    signalDataTypeArray[i + 1] = "i16r";
+                    i++;
+
+                    signalNameArray[i + 1] = Shimmer3Configuration.SignalNames.ALTERNATIVE_ACCELEROMETER_Z;
+                    signalDataTypeArray[i + 1] = "i16r";
+                    i++;
+                }
+
+                // Alternative mag: the AK8975/AK8963 or AK09916 magnetometer, little-endian
+                if ((EnabledSensors & SDLogHeader.MAG_MPU) > 0)
+                {
+                    NumberofChannels += 3;
+                    PacketSize += 6;
+
+                    signalNameArray[i + 1] = Shimmer3Configuration.SignalNames.ALT_MAGNETOMETER_X;
+                    signalDataTypeArray[i + 1] = "i16";
+                    i++;
+
+                    signalNameArray[i + 1] = Shimmer3Configuration.SignalNames.ALT_MAGNETOMETER_Y;
+                    signalDataTypeArray[i + 1] = "i16";
+                    i++;
+
+                    signalNameArray[i + 1] = Shimmer3Configuration.SignalNames.ALT_MAGNETOMETER_Z;
+                    signalDataTypeArray[i + 1] = "i16";
+                    i++;
+                }
+
                 // BMP180/280 temperature
                 if ((EnabledSensors & SDLogHeader.BMPX80) > 0)
                 {
