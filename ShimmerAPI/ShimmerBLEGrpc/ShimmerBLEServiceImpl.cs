@@ -61,7 +61,18 @@ namespace ShimmerBLEGrpc
         {
             string macAddress = request.Name.ToUpper();
             Console.WriteLine("Attempting to connect " + macAddress);
-            BluetoothDevice bluetoothDevice = await BluetoothDevice.FromIdAsync(request.Name);
+            // Listens for the device's advertising first if Windows has not seen it yet. Where it still
+            // isn't heard, the connect fails here rather than on a null device (DEV-1394)
+            BluetoothDevice bluetoothDevice = await ShimmerAPI.BleDeviceLookup.FindAsync(request.Name);
+            if (bluetoothDevice == null)
+            {
+                await stateStatusStream.WriteAsync(new StateStatus
+                {
+                    Message = "Windows knows no BLE device " + request.Name,
+                    State = BluetoothState.Disconnected
+                });
+                return;
+            }
             if (BluetoohDeviceMap.ContainsKey(macAddress))
             {
                 BluetoohDeviceMap.TryRemove(macAddress, out var s);

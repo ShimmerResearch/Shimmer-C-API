@@ -25,6 +25,17 @@ namespace ShimmerAPI
         IDisposable connectionParametersRequest;
         private static bool Debug = false;
         /// <summary>
+        /// How many links OpenConnection opens to find the device's UART service. Windows sometimes brings
+        /// a link up at the default MTU (23) and then finds no UART service on it; the next link usually has
+        /// it (DEV-1394).
+        /// </summary>
+        const int GattAttempts = 2;
+        /// <summary>
+        /// The pause between giving up a link with no UART service and opening the next, so Windows has
+        /// dropped the first rather than hand it back.
+        /// </summary>
+        const int GattRetryPauseMs = 1000;
+        /// <summary>
         ///
         /// </summary>
         /// <param name="devID"></param>
@@ -102,22 +113,37 @@ namespace ShimmerAPI
                 SetState(SHIMMER_STATE_CONNECTING);
                 // A closed buffer stays closed, and a previous link's bytes are not this link's
                 received = new LinkByteBuffer();
-                bluetoothDevice = BluetoothDevice.FromIdAsync(macAddress).GetAwaiter().GetResult();
-                if (bluetoothDevice == null)
-                {
-                    Console.WriteLine("Radio Plugin 32Feet: Windows knows no BLE device " + macAddress);
-                    ConnectFail();
-                    return;
-                }
-                bluetoothDevice.Gatt.ConnectAsync().GetAwaiter().GetResult();
-                Console.WriteLine("current mtu value " + bluetoothDevice.Gatt.Mtu);
 
                 // The version given only says which device's service to ask for first. A Shimmer3 given
                 // as a Shimmer3R, as Shimmer Capture gives every BLE address, has the other one (DEV-1314).
                 // The connect sequence then reads the real version from the device.
                 int otherVersion = HardwareVersion == (int)ShimmerVersion.SHIMMER3R ? (int)ShimmerVersion.SHIMMER3 : (int)ShimmerVersion.SHIMMER3R;
-                BluetoothUuid TxID, RxID;
-                if (!FindUartService(HardwareVersion, out TxID, out RxID) && !FindUartService(otherVersion, out TxID, out RxID))
+                BluetoothUuid TxID = default(BluetoothUuid), RxID = default(BluetoothUuid);
+                bool found = false;
+                int linkMtu = 0;
+                for (int attempt = 1; attempt <= GattAttempts && !found; attempt++)
+                {
+                    if (attempt > 1)
+                    {
+                        // The MTU the link came up at: by now Windows may have raised it
+                        Console.WriteLine("Radio Plugin 32Feet: no UART service on a link that came up at MTU " + linkMtu + "; opening another");
+                        bluetoothDevice.Gatt.Disconnect();
+                        Thread.Sleep(GattRetryPauseMs);
+                    }
+                    // Listens for the device's advertising first if Windows has not seen it yet (DEV-1394)
+                    bluetoothDevice = BleDeviceLookup.FindAsync(macAddress).GetAwaiter().GetResult();
+                    if (bluetoothDevice == null)
+                    {
+                        Console.WriteLine("Radio Plugin 32Feet: Windows knows no BLE device " + macAddress);
+                        ConnectFail();
+                        return;
+                    }
+                    bluetoothDevice.Gatt.ConnectAsync().GetAwaiter().GetResult();
+                    linkMtu = bluetoothDevice.Gatt.Mtu;
+                    Console.WriteLine("current mtu value " + linkMtu);
+                    found =FindUartService(HardwareVersion, out TxID, out RxID) || FindUartService(otherVersion, out TxID, out RxID);
+                }
+                if (!found)
                 {
                     Console.WriteLine("Service TXRX null");
                     ConnectFail();
