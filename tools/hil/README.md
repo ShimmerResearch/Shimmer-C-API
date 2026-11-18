@@ -28,7 +28,12 @@ It follows the other Shimmer HILs rather than inventing its own conventions:
 ## Setup
 
 - **A Windows PC with Bluetooth, and Visual Studio** with MSBuild. The runner finds it with `vswhere`.
-- **Pair each unit's Classic side in Windows** (Settings > Bluetooth & devices). BLE needs no pairing.
+- **Pair each unit's Classic side in Windows** (Settings > Bluetooth & devices). BLE needs no pairing,
+  but Windows must have seen the unit advertise: the API looks a BLE unit up by its address, and
+  Windows doesn't know a unit it hasn't scanned for since, for example, the unit was power-cycled.
+  Every BLE item then fails at once with `Windows knows no BLE device <mac>` in its log. Let Windows
+  scan until it lists the unit before the run, for example in Settings > Bluetooth & devices >
+  Add device > Bluetooth.
 - **A bench file** in the firmware HIL's `rig.toml` format. Start from
   [`rig.example.toml`](rig.example.toml). Name each unit by its Bluetooth MAC, never by COM number: the
   suite finds the COM port from the MAC, because Windows reassigns COM numbers.
