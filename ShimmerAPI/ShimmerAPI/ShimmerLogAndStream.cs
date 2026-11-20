@@ -498,7 +498,7 @@ namespace ShimmerAPI
                             //SetState(SHIMMER_STATE_STREAMING);
                             mWaitingForStartStreamingACK = true;
                             System.Threading.Thread.Sleep(300);
-                            WriteBytes(new byte[1] { (byte)ShimmerBluetooth.PacketTypeShimmer3SDBT.START_SDBT_COMMAND }, 0, 1);
+                            WriteStartSDBTCommand();
                             //System.Threading.Thread.Sleep(1500);
                             /*
                             if (isLogging)
@@ -692,6 +692,16 @@ namespace ShimmerAPI
         {
             base.StartStreaming();
             isLogging = false;
+        }
+
+        /// <summary>
+        /// A refused START_SDBT_COMMAND started no log, so the device is not taken to be logging
+        /// (DEV-1431). The start's ACK never came, so the API is still connected, not streaming.
+        /// </summary>
+        protected override void ProcessLogStartRefused()
+        {
+            isLogging = false;
+            base.ProcessLogStartRefused();
         }
 
         // btsd changes
