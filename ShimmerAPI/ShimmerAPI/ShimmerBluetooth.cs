@@ -702,8 +702,15 @@ namespace ShimmerAPI
         public static readonly double[,] SENSITIVITY_MATRIX_LOW_NOISE_ACCEL_SHIMMER3_KCRB5_2042 = new double[3, 3] { { 83, 0, 0 }, { 0, 83, 0 }, { 0, 0, 83 } };
 
         public static readonly double[,] ALIGNMENT_MATRIX_LOW_NOISE_ACCEL_SHIMMER3_KXTC9_2050 = new double[3, 3] { { 0, -1, 0 }, { -1, 0, 0 }, { 0, 0, -1 } };     //Default Values for Accelerometer Calibration
-        public static readonly double[,] OFFSET_VECTOR_ACCEL_LOW_NOISE_SHIMMER3_KXTC9_2050 = new double[3, 1] { { 2253 }, { 2253 }, { 2253 } };                //Default Values for Accelerometer Calibration
-        public static readonly double[,] SENSITIVITY_MATRIX_LOW_NOISE_ACCEL_SHIMMER3_KXTC9_2050 = new double[3, 3] { { 92, 0, 0 }, { 0, 92, 0 }, { 0, 0, 92 } };
+        // DEV-1521. The KXTC9-2050's output is ratiometric to its supply: Kionix specifies zero-g 1.65 V
+        // and 660 mV/g at Vdd = 3.3 V, with an offset and a sensitivity "ratiometric error"
+        // (KXTC9-2050 Specifications Rev. 2, Table 1). Every Shimmer3 board that carries it (SR31-10,
+        // SR47-6, SR48-5, SR49-3) powers it from the same 3.0 V LDO as the MSP430's AVCC, the ADC
+        // reference, so in ADC counts it reads like the KXRB5-2042: zero-g 1.5 V -> 2047, 600 mV/g ->
+        // 83 per m/s2, as the firmware's own default calibration record holds. The old 2253 and 92
+        // assumed a 3.3 V supply and made an uncalibrated unit read gravity about 17 % high.
+        public static readonly double[,] OFFSET_VECTOR_ACCEL_LOW_NOISE_SHIMMER3_KXTC9_2050 = new double[3, 1] { { 2047 }, { 2047 }, { 2047 } };                //Default Values for Accelerometer Calibration
+        public static readonly double[,] SENSITIVITY_MATRIX_LOW_NOISE_ACCEL_SHIMMER3_KXTC9_2050 = new double[3, 3] { { 83, 0, 0 }, { 0, 83, 0 }, { 0, 0, 83 } };
 
         [System.Obsolete] // As the shimmer 3 sensors are updated, this is made obsolete, and new variables used which indicate the sensor names e.g. LSM303DLHC
         public static readonly double[,] SENSITIVITY_MATRIX_WIDE_RANGE_ACCEL_2G_SHIMMER3 = new double[3, 3] { { 1631, 0, 0 }, { 0, 1631, 0 }, { 0, 0, 1631 } };
