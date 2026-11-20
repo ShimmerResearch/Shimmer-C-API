@@ -100,6 +100,11 @@ namespace ShimmerAPI
 
         protected bool mWaitingForStartStreamingACK = false;
         /// <summary>
+        /// Set while START_SDBT_COMMAND waits for its reply (WriteStartSDBTCommand). An ACK clears it; a
+        /// NACK, the firmware refusing to start a log, is handled by ProcessLogStartRefused (DEV-1431).
+        /// </summary>
+        protected volatile bool mWaitingForStartSDBTACK = false;
+        /// <summary>
         /// Set while WriteCRCMode waits for the ACK to SET_CRC_COMMAND. The firmware switches its CRC
         /// before it builds that ACK, so the ACK is framed in the new mode, mCRCModeAfterACK, and
         /// ReadData switches to it there.
@@ -1307,7 +1312,9 @@ namespace ShimmerAPI
         /// Override to surface the refusal to the application; the notification
         /// raised below is the default. ReadData drops the NACK's link CRC before
         /// or after calling this, so an override that does not call it cannot
-        /// leave the CRC in the stream.
+        /// leave the CRC in the stream. It does need to call it for the API to undo
+        /// what the refused command had set: a CRC switch, a stream start, or a log
+        /// start (ProcessLogStartRefused).
         /// </remarks>
         protected virtual void ProcessNackFromCommand()
         {
@@ -1325,9 +1332,58 @@ namespace ShimmerAPI
              * clear the wait rather than leaving it set for the rest of the session. */
             mWaitingForStartStreamingACK = false;
 
+            String message = "Command refused by the Shimmer";
+            /* A refused START_SDBT_COMMAND: the firmware cannot log now, so it started nothing, neither
+             * the log nor the stream (DEV-1431). */
+            if (mWaitingForStartSDBTACK)
+            {
+                mWaitingForStartSDBTACK = false;
+                ProcessLogStartRefused();
+                message = LogStartRefusedMessage;
+            }
+
             CustomEventArgs newEventArgs = new CustomEventArgs(
-                (int)ShimmerIdentifier.MSG_IDENTIFIER_NOTIFICATION_MESSAGE, "Command refused by the Shimmer");
+                (int)ShimmerIdentifier.MSG_IDENTIFIER_NOTIFICATION_MESSAGE, message);
             OnNewEvent(newEventArgs);
+        }
+
+        /// <summary>
+        /// The notification ProcessNackFromCommand raises when the Shimmer refuses a log start, in place
+        /// of "Command refused by the Shimmer".
+        /// </summary>
+        public const String LogStartRefusedMessage = "The Shimmer refused to start logging to its SD card. "
+            + "It logs only when undocked, off USB power, with an SD card in and no SD file error, "
+            + "and with logging turned on in its configuration.";
+
+        /// <summary>
+        /// Sends START_SDBT_COMMAND, which starts SD logging and streaming together, and marks it as
+        /// waiting for its reply so that a refusal is told apart from any other (DEV-1431).
+        /// </summary>
+        protected void WriteStartSDBTCommand()
+        {
+            mWaitingForStartSDBTACK = true;
+            WriteBytes(new byte[1] { (byte)PacketTypeShimmer3SDBT.START_SDBT_COMMAND }, 0, 1);
+        }
+
+        /// <summary>
+        /// The Shimmer refused START_SDBT_COMMAND with a NACK (DEV-1431). LogAndStream refuses it when no
+        /// log is running and none can start: docked, on USB power, no SD card, an SD file error, or
+        /// logging turned off in its configuration (log-and-stream-common#228). It then starts nothing,
+        /// not even the stream, so the API is not left streaming. Before that firmware it ACKed the
+        /// start and did nothing, and the API took the device to be logging.
+        /// </summary>
+        /// <remarks>
+        /// Called by ProcessNackFromCommand, before its notification. A subclass that keeps its own
+        /// logging state clears it here and calls this.
+        /// </remarks>
+        protected virtual void ProcessLogStartRefused()
+        {
+            /* A start that took the stream as started before its reply (ShimmerSDBT32Feet) reads the
+             * NACK while streaming */
+            if (ShimmerState == SHIMMER_STATE_STREAMING)
+            {
+                SetState(SHIMMER_STATE_CONNECTED);
+            }
         }
 
         /// <summary>
@@ -1493,6 +1549,8 @@ namespace ShimmerAPI
                                 ProcessNackFromCommand();
                                 break;
                             case (byte)PacketTypeShimmer2.ACK_COMMAND:
+                                // A log start that was waiting is accepted
+                                mWaitingForStartSDBTACK = false;
                                 //Since the ack always proceeds the instreamcmd
                                 if (StreamingACKReceived)
                                 {
@@ -1698,6 +1756,8 @@ namespace ShimmerAPI
                                 break;
                             case (byte)PacketTypeShimmer2.ACK_COMMAND:
                                 System.Console.WriteLine("ACK Received");
+                                // A log start that was waiting is accepted
+                                mWaitingForStartSDBTACK = false;
                                 if (mWaitingForCRCModeACK)
                                 {
                                     // The ACK to SET_CRC_COMMAND carries the new mode's CRC, so switch

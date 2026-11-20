@@ -246,8 +246,8 @@ namespace ShimmerBluetoothTests
     /// builds the ACK, and frames every reply in its own CRC mode. The API's own read loop parses the
     /// replies, and a read with nothing to read times out after ReadTimeout, as a serial port's does.
     /// It answers GET_SAMPLING_RATE_COMMAND with the sampling rate and every other command with an ACK,
-    /// and after START_STREAMING_COMMAND it sends a data packet every 20 ms. A command in Refuse is
-    /// answered with a NACK instead, and not acted on. With AllCalibrationBlocks set, it answers
+    /// and after START_STREAMING_COMMAND or START_SDBT_COMMAND it sends a data packet every 20 ms. A
+    /// command in Refuse is answered with a NACK instead, and not acted on. With AllCalibrationBlocks set, it answers
     /// GET_ALL_CALIBRATION_COMMAND with them.
     /// </summary>
     class CrcLinkDevice : CrcFirmwareDevice
@@ -365,7 +365,8 @@ namespace ShimmerBluetoothTests
                 reply.AddRange(AllCalibrationBlocks);
             }
             Send(reply);
-            if (b[index] == (byte)PacketTypeShimmer2.START_STREAMING_COMMAND && streamThread == null)
+            if ((b[index] == (byte)PacketTypeShimmer2.START_STREAMING_COMMAND || b[index] == (byte)PacketTypeShimmer3SDBT.START_SDBT_COMMAND)
+                && streamThread == null)
             {
                 streaming = true;
                 streamThread = new Thread(new ThreadStart(SendPackets));

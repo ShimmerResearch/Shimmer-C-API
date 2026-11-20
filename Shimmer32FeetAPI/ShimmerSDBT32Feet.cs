@@ -404,7 +404,9 @@ namespace ShimmerAPI
                         {
                             //System.Console.WriteLine("ShimmerLOG: Send START SDBT CMD");
                             System.Threading.Thread.Sleep(300);
-                            WriteBytes(new byte[1] { (byte)ShimmerSDBT.PacketTypeShimmer3SDBT.START_SDBT_COMMAND }, 0, 1);
+                            // Refused, the read thread takes the API back to connected and clears
+                            // isLogging (ProcessLogStartRefused), so the directory is not asked for
+                            WriteStartSDBTCommand();
                             System.Threading.Thread.Sleep(1500);
 
 
@@ -555,6 +557,17 @@ namespace ShimmerAPI
         {
             base.StartStreaming();
             isLogging = false;
+        }
+
+        /// <summary>
+        /// A refused START_SDBT_COMMAND started no log, so the device is not taken to be logging
+        /// (DEV-1431). StartStreamingandLog takes the stream as started before it sends the command, so
+        /// the base takes the API back to connected.
+        /// </summary>
+        protected override void ProcessLogStartRefused()
+        {
+            isLogging = false;
+            base.ProcessLogStartRefused();
         }
 
         // btsd changes
